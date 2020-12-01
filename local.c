@@ -74,7 +74,7 @@ typedef struct _ChangeListEntry {
   void *anything;
 } ChangeListEntry;
 
-static ChangeListEntry change_list;
+static ChangeListEntry change_list; //mefi84 scheint handler zu enthalten
 
 /* ================================================== */
 
@@ -219,7 +219,7 @@ LCL_GetMaxClockError(void)
 /* ================================================== */
 
 void
-LCL_AddParameterChangeHandler(LCL_ParameterChangeHandler handler, void *anything)
+LCL_AddParameterChangeHandler(LCL_ParameterChangeHandler handler, void *anything) //mefi84 the local clock changes frequency or is slewed: call some handles (scheduler, ntp-sources, PHC interface (PTP), Reference.c(REF time), ntp_sources.c(Servers we use),.. )
 {
   ChangeListEntry *ptr, *new_entry;
 
@@ -352,7 +352,7 @@ void LCL_RemoveDispersionNotifyHandler(LCL_DispersionNotifyHandler handler, void
 void
 LCL_ReadRawTime(struct timespec *ts)
 {
-#if HAVE_CLOCK_GETTIME
+#if HAVE_CLOCK_GETTIME  
   if (clock_gettime(CLOCK_REALTIME, ts) < 0)
     LOG_FATAL("clock_gettime() failed : %s", strerror(errno));
 #else
@@ -379,7 +379,7 @@ LCL_ReadCookedTime(struct timespec *result, double *err)
 /* ================================================== */
 
 void
-LCL_CookTime(struct timespec *raw, struct timespec *cooked, double *err)
+LCL_CookTime(struct timespec *raw, struct timespec *cooked, double *err) //mefi84 entspricht CLOCK_REALTIME korrigiert um Frequenzabweichung * Duration - ausstehende Offset <======> die beste Zeit die seit letzter Sync unter ausnutzung der Trainingsdaten (Frequency Offset) und unter beachtung der noch fehlenden Anpassungen (da diese zeitverzögert angewendet werden)
 {
   double correction;
 
@@ -393,7 +393,7 @@ void
 LCL_GetOffsetCorrection(struct timespec *raw, double *correction, double *err)
 {
   /* Call system specific driver to get correction */
-  (*drv_offset_convert)(raw, correction, err);
+  (*drv_offset_convert)(raw, correction, err); //mefi84 Festgestellt Frequenzabweichung * Duration == Correction (Ausstehendes Änderungen offset_register wird gleich abgezogen)
 }
 
 /* ================================================== */

@@ -325,17 +325,17 @@ CLG_Initialise(void)
     leak_rate[i] = 0;
     limit_interval[i] = MIN_LIMIT_INTERVAL;
 
-    switch (i) {
+    switch (i) { //mefi84 default alles deaktiviert bzw keine Änderungen
       case CLG_NTP:
-        if (!CNF_GetNTPRateLimit(&interval, &burst, &lrate))
+        if (!CNF_GetNTPRateLimit(&interval, &burst, &lrate)) //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#ratelimit
           continue;
         break;
       case CLG_NTSKE:
-        if (!CNF_GetNtsRateLimit(&interval, &burst, &lrate))
+        if (!CNF_GetNtsRateLimit(&interval, &burst, &lrate)) //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#ntsratelimit
           continue;
         break;
       case CLG_CMDMON:
-        if (!CNF_GetCommandRateLimit(&interval, &burst, &lrate))
+        if (!CNF_GetCommandRateLimit(&interval, &burst, &lrate)) //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#cmdratelimit
           continue;
         break;
       default:
@@ -347,7 +347,7 @@ CLG_Initialise(void)
     limit_interval[i] = CLAMP(MIN_LIMIT_INTERVAL, interval, MAX_LIMIT_INTERVAL);
   }
 
-  active = !CNF_GetNoClientLog();
+  active = !CNF_GetNoClientLog(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#noclientlog ACHTUNG: his option also effectively disables server support for the NTP interleaved mode.
   if (!active) {
     for (i = 0; i < MAX_SERVICES; i++) {
       if (leak_rate[i] != 0)

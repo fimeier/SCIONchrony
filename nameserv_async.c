@@ -86,7 +86,7 @@ end_resolving(int fd, int event, void *anything)
   SCH_RemoveFileHandler(inst->pipe[0]);
   close(inst->pipe[0]);
   close(inst->pipe[1]);
-
+  //mefi84 Goal: i==#IPs==index of first entry with IPADDR_UNSPEC
   for (i = 0; inst->status == DNS_Success && i < DNS_MAX_ADDRESSES &&
               inst->addresses[i].family != IPADDR_UNSPEC; i++)
     ;

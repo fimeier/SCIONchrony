@@ -301,7 +301,7 @@ offset_convert(struct timespec *raw,
 
   duration = UTI_DiffTimespecsToDouble(raw, &slew_start);
 
-  if (drv_get_offset_correction && fastslew_active) {
+  if (drv_get_offset_correction && fastslew_active) { //mefi84 scheint nicht aktiviert zu sein
     drv_get_offset_correction(raw, &fastslew_corr, &fastslew_err);
     if (fastslew_corr == 0.0 && fastslew_err == 0.0)
       fastslew_active = 0;
@@ -309,9 +309,9 @@ offset_convert(struct timespec *raw,
     fastslew_corr = fastslew_err = 0.0;
   }
 
-  *corr = slew_freq * duration + fastslew_corr - offset_register;
+  *corr = slew_freq * duration + fastslew_corr - offset_register; //mefi84 Festgestellt Frequenzabweichung * Duration == Correction (Ausstehendes Änderungen offset_register muss noch abgezogen werden)
 
-  if (err) {
+  if (err) { //mefi84 todo analysieren
     *err = fastslew_err;
     if (fabs(duration) <= max_freq_change_delay)
       *err += slew_error;

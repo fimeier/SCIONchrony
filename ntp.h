@@ -84,7 +84,7 @@ typedef enum {
 } NTP_Mode;
 
 typedef struct {
-  uint8_t lvm;
+  uint8_t lvm; //mefi84 LeapIndicator(2)||VersionNumber(3)||Mode(3) == 8 Bits
   uint8_t stratum;
   int8_t poll;
   int8_t precision;

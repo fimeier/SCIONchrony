@@ -110,7 +110,7 @@ static int dummy_rxts_socket;
 /* ================================================== */
 
 static int
-add_interface(CNF_HwTsInterface *conf_iface)
+add_interface(CNF_HwTsInterface *conf_iface) //mefi84 NIC: 1. Get ts_info 2. Get it's "PHC" i.e. /dev/ptp0 and register it as interface HINT: iface{IN}interfaces ist static i.e. permanent storage
 {
   struct ethtool_ts_info ts_info;
   struct hwtstamp_config ts_config;
@@ -146,16 +146,16 @@ add_interface(CNF_HwTsInterface *conf_iface)
 
   if_index = req.ifr_ifindex;
 
-  ts_info.cmd = ETHTOOL_GET_TS_INFO;
+  ts_info.cmd = ETHTOOL_GET_TS_INFO; //mefi84 TS Flags Abfrage vorbereiten
   req.ifr_data = (char *)&ts_info;
 
-  if (ioctl(sock_fd, SIOCETHTOOL, &req)) {
+  if (ioctl(sock_fd, SIOCETHTOOL, &req)) { //mefi84 TS Flags Abfrage ausführen
     DEBUG_LOG("ioctl(%s) failed : %s", "SIOCETHTOOL", strerror(errno));
     SCK_CloseSocket(sock_fd);
     return 0;
   }
 
-  req_hwts_flags = SOF_TIMESTAMPING_RX_HARDWARE | SOF_TIMESTAMPING_TX_HARDWARE |
+  req_hwts_flags = SOF_TIMESTAMPING_RX_HARDWARE | SOF_TIMESTAMPING_TX_HARDWARE | //mefi84 TS Flags vergleichen mit gewünschtem
                    SOF_TIMESTAMPING_RAW_HARDWARE;
   if ((ts_info.so_timestamping & req_hwts_flags) != req_hwts_flags) {
     DEBUG_LOG("HW timestamping not supported on %s", req.ifr_name);
@@ -194,12 +194,12 @@ add_interface(CNF_HwTsInterface *conf_iface)
       break;
   }
 
-  ts_config.flags = 0;
+  ts_config.flags = 0; //mefi84 activate HWTSTAMP with supported types/filters
   ts_config.tx_type = HWTSTAMP_TX_ON;
   ts_config.rx_filter = rx_filter;
   req.ifr_data = (char *)&ts_config;
 
-  if (ioctl(sock_fd, SIOCSHWTSTAMP, &req)) {
+  if (ioctl(sock_fd, SIOCSHWTSTAMP, &req)) { //mefi84 optionen effektiv aktivieren, returns 0 if succ
     LOG(errno == EPERM ? LOGS_ERR : LOGS_DEBUG,
         "ioctl(%s) failed : %s", "SIOCSHWTSTAMP", strerror(errno));
 
@@ -371,7 +371,7 @@ NIO_Linux_Initialise(void)
   for (i = hwts = 0; CNF_GetHwTsInterface(i, &conf_iface); i++) {
     if (!strcmp("*", conf_iface->name))
       continue;
-    if (!add_interface(conf_iface))
+    if (!add_interface(conf_iface)) //mefi84 fügt für ausgewählte NICs PHC interface (PTP) hinzu, d.h. HW-CLock im NIC
       LOG_FATAL("Could not enable HW timestamping on %s", conf_iface->name);
     hwts = 1;
   }
@@ -383,10 +383,10 @@ NIO_Linux_Initialise(void)
       hwts = 1;
     break;
   }
-
-  ts_flags = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE;
+  
+  ts_flags = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE; 
   ts_tx_flags = SOF_TIMESTAMPING_TX_SOFTWARE;
-
+  //mefi84 flags werden bei add_interface() bereits geprüft im Context des ausgewählten "NIC"... check_timestamping_option() scheinen HW unabhängig zu sein, da NIC nicht gewählt wird
   if (hwts) {
     ts_flags |= SOF_TIMESTAMPING_RAW_HARDWARE | SOF_TIMESTAMPING_RX_HARDWARE;
     ts_tx_flags |= SOF_TIMESTAMPING_TX_HARDWARE;
@@ -406,7 +406,7 @@ NIO_Linux_Initialise(void)
   /* Kernels before 4.7 ignore timestamping flags set in control messages */
   permanent_ts_options = !SYS_Linux_CheckKernelVersion(4, 7);
 
-  monitored_socket = INVALID_SOCK_FD;
+  monitored_socket = INVALID_SOCK_FD; //mefi84 ????...
   suspended_socket = INVALID_SOCK_FD;
   dummy_rxts_socket = INVALID_SOCK_FD;
 }
@@ -517,7 +517,7 @@ suspend_socket(int sock_fd)
 int
 NIO_Linux_ProcessEvent(int sock_fd, int event)
 {
-  if (sock_fd != monitored_socket)
+  if (sock_fd != monitored_socket) //mefi84 Race-Condition oder nur Debuggin problem?? Schlägt fehl, wenn überschrieben wurde
     return 0;
 
   if (event == SCH_FILE_INPUT) {
@@ -560,7 +560,7 @@ process_hw_timestamp(struct Interface *iface, struct timespec *hw_ts,
   struct timespec sample_phc_ts, sample_sys_ts, sample_local_ts, ts;
   double rx_correction, ts_delay, phc_err, local_err;
 
-  if (HCL_NeedsNewSample(iface->clock, &local_ts->ts)) {
+  if (HCL_NeedsNewSample(iface->clock, &local_ts->ts)) { //mefi84 VERMUTUNG: Dies dient zum Abschätzen des Offsets NIC/Systemtime
     if (!SYS_Linux_GetPHCSample(iface->phc_fd, iface->phc_nocrossts, iface->precision,
                                 &iface->phc_mode, &sample_phc_ts, &sample_sys_ts,
                                 &phc_err))
@@ -570,7 +570,7 @@ process_hw_timestamp(struct Interface *iface, struct timespec *hw_ts,
     HCL_AccumulateSample(iface->clock, &sample_phc_ts, &sample_local_ts,
                          phc_err + local_err);
 
-    update_interface_speed(iface);
+    update_interface_speed(iface); //mefi84 Warum wird das hier getan?
   }
 
   /* We need to transpose RX timestamps as hardware timestamps are normally
@@ -751,7 +751,7 @@ NIO_Linux_ProcessMessage(SCK_Message *message, NTP_Local_Address *local_addr,
   /* Return the message if it's not received from the error queue */
   if (!is_tx)
     return 0;
-
+  //mefi84 Vermutlich wird hier das gesendete Paket ebenfalls extrahiert zusammen mit einem TS (falls man etwas gesendet hat, d.h. vermutlich nur im TX fall oder bei RX+Error?... analysiere woher RX TS kommen)
   /* The data from the error queue includes all layers up to UDP.  We have to
      extract the UDP data and also the destination address with port as there
      currently doesn't seem to be a better way to get them both. */
@@ -796,13 +796,13 @@ NIO_Linux_RequestTxTimestamp(SCK_Message *message, int sock_fd)
      events on the socket in order to avoid processing of a fast response
      without the HW timestamp of the request */
   if (ts_tx_flags & SOF_TIMESTAMPING_TX_HARDWARE && !NIO_IsServerSocket(sock_fd))
-    monitored_socket = sock_fd;
+    monitored_socket = sock_fd; //mefi84 Annahme dass kein anderer Request dies überschreibt, da separiert
 
   /* Check if TX timestamping is disabled on this socket */
-  if (permanent_ts_options || !NIO_IsServerSocket(sock_fd))
+  if (permanent_ts_options || !NIO_IsServerSocket(sock_fd)) //mefi84 ????????? ein ClientSocket returnt hier immer...
     return;
 
-  message->timestamp.tx_flags = ts_tx_flags;
+  message->timestamp.tx_flags = ts_tx_flags; //mefi84 dieser Teil der Message wird sowieso nicht gesendet
 }
 
 /* ================================================== */

@@ -377,7 +377,7 @@ change_source_address(NTP_Remote_Address *old_addr, NTP_Remote_Address *new_addr
   record = get_record(slot1);
   NCR_ChangeRemoteAddress(record->data, new_addr, !replacement);
   record->remote_addr = NCR_GetRemoteAddress(record->data);
-  if (!UTI_IsIPReal(&old_addr->ip_addr) && UTI_IsIPReal(&new_addr->ip_addr)) {
+  if (!UTI_IsIPReal(&old_addr->ip_addr) && UTI_IsIPReal(&new_addr->ip_addr)) { //mefi84 old_add was just an unresolved NAME i.e. IPADDR_ID (id not ip)
     if (auto_start_sources)
       NCR_StartInstance(record->data);
     if (record->pool_id != INVALID_POOL)
@@ -439,7 +439,7 @@ process_resolved_name(struct UnresolvedSource *us, IPAddr *ip_addrs, int n_addrs
     UTI_GetRandomBytes(&first, sizeof (first));
 
   for (i = 0; i < n_addrs; i++) {
-    new_addr.ip_addr = ip_addrs[((unsigned int)i + first) % n_addrs];
+    new_addr.ip_addr = ip_addrs[((unsigned int)i + first) % n_addrs]; //mefi84 primär für random ip wahl nötig
 
     DEBUG_LOG("(%d) %s", i + 1, UTI_IPToString(&new_addr.ip_addr));
 
@@ -725,8 +725,8 @@ NSR_AddSourceByName(char *name, int port, int pool, NTP_Source_Type type,
 /* ================================================== */
 
 void
-NSR_SetSourceResolvingEndHandler(NSR_SourceResolvingEndHandler handler)
-{
+NSR_SetSourceResolvingEndHandler(NSR_SourceResolvingEndHandler handler) //mefi84 ntp_source_resolving_end wird durch post_init_ntp_hook() gesetzt, wird der Handler ausgeführt, dann setzt er sich hier als erstes NULL
+{                                                                       
   resolving_end_handler = handler;
 }
 
@@ -738,7 +738,7 @@ NSR_ResolveSources(void)
   /* Try to resolve unresolved sources now */
   if (unresolved_sources) {
     /* Make sure no resolving is currently running */
-    if (!resolving_source) {
+    if (!resolving_source) { //mef84 race conditions?
       if (resolving_id != 0) {
         SCH_RemoveTimeout(resolving_id);
         resolving_id = 0;

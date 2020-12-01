@@ -1,0 +1,25 @@
+2020-10-25T12:19:05Z chronyd version DEVELOPMENT starting (+CMDMON +NTP +REFCLOCK +RTC -PRIVDROP -SCFILTER -SIGND +ASYNCDNS -NTS -SECHASH +IPV6 -DEBUG)
+2020-10-25T12:19:05Z Disabled control of system clock
+2020-10-25T12:19:05Z mefi::SCH_MainLoop() .
+2020-10-25T12:19:05Z mefi::SCH_MainLoop() .
+2020-10-25T12:19:05Z mefi::SCH_MainLoop() .
+2020-10-25T12:19:05Z mefi::SCH_MainLoop() .
+2020-10-25T12:20:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:20:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:20:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:21:10Z chronyd version DEVELOPMENT starting (+CMDMON +NTP +REFCLOCK +RTC -PRIVDROP -SCFILTER -SIGND +ASYNCDNS -NTS -SECHASH +IPV6 -DEBUG)
+2020-10-25T12:21:10Z Disabled control of system clock
+2020-10-25T12:21:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:21:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:21:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:21:10Z logdir not specified
+2020-10-25T12:21:10Z mefi::SCH_MainLoop() .
+2020-10-25T12:22:15Z mefi::SCH_MainLoop() .
+2020-10-25T12:22:15Z mefi::SCH_MainLoop() .
+2020-10-25T12:22:15Z mefi::SCH_MainLoop() .
+2020-10-25T12:23:27Z chronyd version DEVELOPMENT starting (+CMDMON +NTP +REFCLOCK +RTC -PRIVDROP -SCFILTER -SIGND +ASYNCDNS -NTS -SECHASH +IPV6 -DEBUG)
+2020-10-25T12:23:27Z Disabled control of system clock
+2020-10-25T12:23:27Z mefi::SCH_MainLoop() .
+2020-10-25T12:23:27Z mefi::SCH_MainLoop() .
+2020-10-25T12:23:27Z mefi::SCH_MainLoop() .
+2020-10-25T12:23:27Z mefi::SCH_MainLoop() .

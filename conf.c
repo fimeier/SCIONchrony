@@ -375,7 +375,7 @@ void
 CNF_Initialise(int r, int client_only)
 {
   restarted = r;
-
+  //mefi84 ARR_CreateInstance <=> array with automatic memory allocation
   hwts_interfaces = ARR_CreateInstance(sizeof (CNF_HwTsInterface));
 
   init_sources = ARR_CreateInstance(sizeof (IPAddr));
@@ -395,15 +395,15 @@ CNF_Initialise(int r, int client_only)
   if (client_only) {
     cmd_port = ntp_port = 0;
   } else {
-    bind_cmd_path = Strdup(DEFAULT_COMMAND_SOCKET);
-    pidfile = Strdup(DEFAULT_PID_FILE);
+    bind_cmd_path = Strdup(DEFAULT_COMMAND_SOCKET); //mefi84 /var/run/chrony/chronyd.sock
+    pidfile = Strdup(DEFAULT_PID_FILE); //mefi84 /var/run/chrony/chronyd.pid
   }
-
-  SCK_GetAnyLocalIPAddress(IPADDR_INET4, &bind_address4);
+  //mefi84 SCK_... <=> This file implements socket operations.: ITS Always 0.0.0.0 address.. just setting the variables
+  SCK_GetAnyLocalIPAddress(IPADDR_INET4, &bind_address4); //mefi84 IP addresses for binding the NTP server sockets to
   SCK_GetAnyLocalIPAddress(IPADDR_INET6, &bind_address6);
-  SCK_GetAnyLocalIPAddress(IPADDR_INET4, &bind_acq_address4);
+  SCK_GetAnyLocalIPAddress(IPADDR_INET4, &bind_acq_address4); //mefi84 IP addresses for binding the NTP client sockets to
   SCK_GetAnyLocalIPAddress(IPADDR_INET6, &bind_acq_address6);
-  SCK_GetLoopbackIPAddress(IPADDR_INET4, &bind_cmd_address4);
+  SCK_GetLoopbackIPAddress(IPADDR_INET4, &bind_cmd_address4); //mefi84 IP addresses for binding the command socket to
   SCK_GetLoopbackIPAddress(IPADDR_INET6, &bind_cmd_address6);
 }
 
@@ -1821,7 +1821,7 @@ CNF_AddInitSources(void)
 /* ================================================== */
 
 void
-CNF_AddSources(void)
+CNF_AddSources(void) //mefi84 fügt source static struct SRC_Instance_Record **sources bei sources.c hinzu
 {
   NTP_Source *source;
   unsigned int i;
@@ -2203,7 +2203,7 @@ CNF_SetupAccessRestrictions(void)
   int status;
   unsigned int i;
 
-  for (i = 0; i < ARR_GetSize(ntp_restrictions); i++) {
+  for (i = 0; i < ARR_GetSize(ntp_restrictions); i++) { //mefi84 allow als Server was akzeptieren
     node = ARR_GetElement(ntp_restrictions, i);
     status = NCR_AddAccessRestriction(&node->ip, node->subnet_bits, node->allow, node->all);
     if (!status) {
@@ -2211,7 +2211,7 @@ CNF_SetupAccessRestrictions(void)
     }
   }
 
-  for (i = 0; i < ARR_GetSize(cmd_restrictions); i++) {
+  for (i = 0; i < ARR_GetSize(cmd_restrictions); i++) { //mefi84 anbalog für cmdallow dh command interface (default ist wohl alles sperren...)
     node = ARR_GetElement(cmd_restrictions, i);
     status = CAM_AddAccessRestriction(&node->ip, node->subnet_bits, node->allow, node->all);
     if (!status) {

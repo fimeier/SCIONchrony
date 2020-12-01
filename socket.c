@@ -42,6 +42,9 @@
 #include "privops.h"
 #include "util.h"
 
+#include "scion.h"
+
+
 #define INVALID_SOCK_FD (-4)
 #define CMSG_BUF_SIZE 256
 
@@ -154,17 +157,19 @@ check_socket_flag(int sock_flag, int fd_flag, int fs_flag)
 {
   int sock_fd, fd_flags, fs_flags;
 
-  sock_fd = socket(AF_INET, SOCK_DGRAM | sock_flag, 0);
+  //sock_fd = socket(AF_INET, SOCK_DGRAM | sock_flag, 0); //mefi socket(int domain, int type, int protocol):
+  sock_fd = SCION_socket(AF_INET, SOCK_DGRAM | sock_flag, 0);
   if (sock_fd < 0)
     return 0;
 
-  fd_flags = fcntl(sock_fd, F_GETFD);
-  fs_flags = fcntl(sock_fd, F_GETFL);
+  fd_flags = fcntl(sock_fd, F_GETFD); //mefi Get file descriptor flags
+  fs_flags = fcntl(sock_fd, F_GETFL); //mefi Get file status flags
 
-  close(sock_fd);
+  //close(sock_fd); //mefi84 SCION
+  SCION_close(sock_fd);
 
-  if (fd_flags == -1 || (fd_flags & fd_flag) != fd_flag ||
-      fs_flags == -1 || (fs_flags & fs_flag) != fs_flag)
+  if (fd_flags == -1 || (fd_flags & fd_flag) != fd_flag || //mefi prüfe ob arg 2 gestzt werden konnte, dh "SOCK_CLOEXEC"
+      fs_flags == -1 || (fs_flags & fs_flag) != fs_flag)  //mefi prüfe arg 3
     return 0;
 
   return 1;
@@ -200,7 +205,7 @@ get_open_flags(int flags)
 }
 
 /* ================================================== */
-
+//mefi84 Sets SOCK_CLOEXEC or SOCK_NONBLOCK
 static int
 set_socket_flags(int sock_fd, int flags)
 {
@@ -226,20 +231,21 @@ set_socket_flags(int sock_fd, int flags)
 /* ================================================== */
 
 static int
-open_socket(int domain, int type, int flags)
+open_socket(int domain, int type, int flags) //mefi84 unklar 
 {
   int sock_fd;
 
-  sock_fd = socket(domain, type | get_open_flags(flags), 0);
-
+  //sock_fd = socket(domain, type | get_open_flags(flags), 0); //mefi84 SOCK_NONBLOCK oder SOCK_CLOEXEC kann zum Type hinzugefügt werden
+  sock_fd = SCION_socket(domain, type | get_open_flags(flags), 0);
   if (sock_fd < 0) {
     DEBUG_LOG("Could not open %s socket : %s",
               domain_to_string(domain), strerror(errno));
     return INVALID_SOCK_FD;
   }
 
-  if (!set_socket_flags(sock_fd, flags)) {
-    close(sock_fd);
+  if (!set_socket_flags(sock_fd, flags)) { //mefi84 SOCK_NONBLOCK, SOCK_CLOEXEC KÖNNTE eigentlich auch bei get_open_flags(flags) implementiert werden... (rein technisch.. ob es von der logik her funktioniert unklar)
+    //close(sock_fd); //mefi84
+    SCION_close(sock_fd);
     return INVALID_SOCK_FD;
   }
 
@@ -260,8 +266,11 @@ open_socket_pair(int domain, int type, int flags, int *other_fd)
   }
 
   if (!set_socket_flags(sock_fds[0], flags) || !set_socket_flags(sock_fds[1], flags)) {
-    close(sock_fds[0]);
-    close(sock_fds[1]);
+    //close(sock_fds[0]); //mefi84 SCION
+    //close(sock_fds[1]);
+    SCION_close(sock_fds[0]);
+    SCION_close(sock_fds[1]);
+
     return INVALID_SOCK_FD;
   }
 
@@ -271,19 +280,19 @@ open_socket_pair(int domain, int type, int flags, int *other_fd)
 }
 
 /* ================================================== */
-
+//mefi84 Sets SO_BROADCAST
 static int
 set_socket_options(int sock_fd, int flags)
 {
   /* Make the socket capable of sending broadcast packets if requested */
-  if (flags & SCK_FLAG_BROADCAST && !SCK_SetIntOption(sock_fd, SOL_SOCKET, SO_BROADCAST, 1))
+  if (flags & SCK_FLAG_BROADCAST && !SCK_SetIntOption(sock_fd, SOL_SOCKET, SO_BROADCAST, 1)) //mefi84 Infos about SOL_SOCKETand SO_BROADCAST https://www.gnu.org/software/libc/manual/html_node/Socket_002dLevel-Options.html#Socket_002dLevel-Options
     ;
 
   return 1;
 }
 
 /* ================================================== */
-
+//mefi84 Sets IP_PKTINFO (UDP: locInterface, locAdress, DestAdressHeader des empfangenen UDP packets), oder auch IPv6 stuff
 static int
 set_ip_options(int sock_fd, int family, int flags)
 {
@@ -340,7 +349,8 @@ static int
 bind_device(int sock_fd, const char *iface)
 {
 #ifdef SO_BINDTODEVICE
-  if (setsockopt(sock_fd, SOL_SOCKET, SO_BINDTODEVICE, iface, strlen(iface) + 1) < 0) {
+  //if (setsockopt(sock_fd, SOL_SOCKET, SO_BINDTODEVICE, iface, strlen(iface) + 1) < 0) {
+  if (SCION_setsockopt(sock_fd, SOL_SOCKET, SO_BINDTODEVICE, iface, strlen(iface) + 1) < 0) {
     DEBUG_LOG("Could not bind socket to %s : %s", iface, strerror(errno));
     return 0;
   }
@@ -408,7 +418,8 @@ connect_ip_address(int sock_fd, IPSockAddr *addr)
   if (saddr_len == 0)
     return 0;
 
-  if (connect(sock_fd, &saddr.sa, saddr_len) < 0 && errno != EINPROGRESS) {
+  //if (connect(sock_fd, &saddr.sa, saddr_len) < 0 && errno != EINPROGRESS) { //mefi84 EINPROGRESS==Operation now in progress
+  if (SCION_connect(sock_fd, &saddr.sa, saddr_len) < 0 && errno != EINPROGRESS) { //mefi84 SCION
     DEBUG_LOG("Could not connect socket to %s : %s",
               UTI_IPSockAddrToString(addr), strerror(errno));
     return 0;
@@ -454,13 +465,13 @@ open_ip_socket(IPSockAddr *remote_addr, IPSockAddr *local_addr, const char *ifac
   if (sock_fd < 0)
     return INVALID_SOCK_FD;
 
-  if (!set_socket_options(sock_fd, flags))
+  if (!set_socket_options(sock_fd, flags)) //mefi84 Sets SO_BROADCAST
     goto error;
 
-  if (!set_ip_options(sock_fd, family, flags))
+  if (!set_ip_options(sock_fd, family, flags)) //mefi84 Sets IP_PKTINFO 
     goto error;
 
-  if (iface && !bind_device(sock_fd, iface))
+  if (iface && !bind_device(sock_fd, iface)) //mefi84 spezifisches Interface (HW NIC) würde über bind_device mittels SO_BINDTODEVICE fix mit Socket gelinkt
     goto error;
 
   /* Bind the socket if a non-any local address/port was specified */
@@ -860,7 +871,7 @@ process_header(struct msghdr *msg, int msg_length, int sock_fd, int flags,
     }
 #endif
 
-    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING) {
+    if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING) { //mefi84 Kernel Timestamps / HW Timestamps werden in seperaten Messages erhalten
       struct scm_timestamping ts3;
 
       memcpy(&ts3, CMSG_DATA(cmsg), sizeof (ts3));
@@ -889,7 +900,8 @@ process_header(struct msghdr *msg, int msg_length, int sock_fd, int flags,
         DEBUG_LOG("Unexpected SCM_RIGHTS");
         for (i = 0; CMSG_LEN((i + 1) * sizeof (int)) <= cmsg->cmsg_len; i++) {
           memcpy(&fd, (char *)CMSG_DATA(cmsg) + i * sizeof (int), sizeof (fd));
-          close(fd);
+          //close(sock_fd);
+          SCION_close(sock_fd); //mefi84 SCION
         }
         r = 0;
       } else {
@@ -899,7 +911,8 @@ process_header(struct msghdr *msg, int msg_length, int sock_fd, int flags,
   }
 
   if (!r && message->descriptor != INVALID_SOCK_FD)
-    close(message->descriptor);
+    //close(message->descriptor);
+    SCION_close(sock_fd); //mefi84 SCION
 
   return r;
 }
@@ -938,7 +951,8 @@ receive_messages(int sock_fd, int flags, int max_messages, int *num_messages)
   recv_flags = get_recv_flags(flags);
 
 #ifdef HAVE_RECVMMSG
-  ret = recvmmsg(sock_fd, hdr, n, recv_flags, NULL);
+  //ret = recvmmsg(sock_fd, hdr, n, recv_flags, NULL); //mefi84
+  ret = SCION_recvmmsg(sock_fd, hdr, n, recv_flags, NULL); //mefi84 SCION
   if (ret >= 0)
     n = ret;
 #else
@@ -1011,8 +1025,8 @@ send_message(int sock_fd, SCK_Message *message, int flags)
   struct cmsghdr cmsg_buf[CMSG_BUF_SIZE / sizeof (struct cmsghdr)];
   union sockaddr_all saddr;
   socklen_t saddr_len;
-  struct msghdr msg;
-  struct iovec iov;
+  struct msghdr msg; //mefi84 anschauen
+  struct iovec iov; //mefi84 anschauen
 
   switch (message->addr_type) {
     case SCK_ADDR_UNSPEC:
@@ -1101,7 +1115,7 @@ send_message(int sock_fd, SCK_Message *message, int flags)
   }
 
 #ifdef HAVE_LINUX_TIMESTAMPING
-  if (message->timestamp.tx_flags) {
+  if (message->timestamp.tx_flags) { //mefi84 Für Client sockets ist dies bereits gesetzt vgl. ntp_io.c::open_socket()
     int *ts_tx_flags;
 
     /* Set timestamping flags for this message */
@@ -1129,7 +1143,8 @@ send_message(int sock_fd, SCK_Message *message, int flags)
   if (msg.msg_controllen == 0)
     msg.msg_control = NULL;
 
-  if (sendmsg(sock_fd, &msg, 0) < 0) {
+  //if (sendmsg(sock_fd, &msg, 0) < 0) { //mefi84 Hier wird effektiv gesendet
+  if (SCION_sendmsg(sock_fd, &msg, 0) < 0) { //mefi84 Hier wird effektiv gesendet
     log_message(sock_fd, -1, message, "Could not send", strerror(errno));
     return 0;
   }
@@ -1164,7 +1179,7 @@ SCK_Initialise(int family)
 
   supported_socket_flags = 0;
 #ifdef SOCK_CLOEXEC
-  if (check_socket_flag(SOCK_CLOEXEC, FD_CLOEXEC, 0))
+  if (check_socket_flag(SOCK_CLOEXEC, FD_CLOEXEC, 0)) //mefi
     supported_socket_flags |= SOCK_CLOEXEC;
 #endif
 #ifdef SOCK_NONBLOCK
@@ -1327,7 +1342,8 @@ SCK_OpenUnixSocketPair(int flags, int *other_fd)
 int
 SCK_SetIntOption(int sock_fd, int level, int name, int value)
 {
-  if (setsockopt(sock_fd, level, name, &value, sizeof (value)) < 0) {
+  //if (setsockopt(sock_fd, level, name, &value, sizeof (value)) < 0) { //mefi84 SCION
+  if (SCION_setsockopt(sock_fd, level, name, &value, sizeof (value)) < 0) { //mefi84 SCION
     DEBUG_LOG("setsockopt() failed fd=%d level=%d name=%d value=%d : %s",
               sock_fd, level, name, value, strerror(errno));
     return 0;
@@ -1343,7 +1359,8 @@ SCK_GetIntOption(int sock_fd, int level, int name, int *value)
 {
   socklen_t len = sizeof (*value);
 
-  if (getsockopt(sock_fd, level, name, value, &len) < 0) {
+  //if (getsockopt(sock_fd, level, name, value, &len) < 0) { //mefi84
+  if (SCION_getsockopt(sock_fd, level, name, value, &len) < 0) { //mefi84 SCION
     DEBUG_LOG("getsockopt() failed fd=%d level=%d name=%d : %s",
               sock_fd, level, name, strerror(errno));
     return 0;
@@ -1398,7 +1415,8 @@ SCK_AcceptConnection(int sock_fd, IPSockAddr *remote_addr)
   }
 
   if (!UTI_FdSetCloexec(conn_fd) || !set_socket_nonblock(conn_fd)) {
-    close(conn_fd);
+    //close(conn_fd);
+    SCION_close(conn_fd); //mefi84 SCION
     return INVALID_SOCK_FD;
   }
 
@@ -1537,7 +1555,8 @@ SCK_RemoveSocket(int sock_fd)
 void
 SCK_CloseSocket(int sock_fd)
 {
-  close(sock_fd);
+  //close(sock_fd);
+  SCION_close(sock_fd); //mefi84 SCION
 }
 
 /* ================================================== */
@@ -1582,7 +1601,7 @@ SCK_IPSockAddrToSockaddr(IPSockAddr *ip_sa, struct sockaddr *sa, int sa_length)
         return 0;
       memset(sa, 0, sizeof (struct sockaddr_in));
       sa->sa_family = AF_INET;
-      ((struct sockaddr_in *)sa)->sin_addr.s_addr = htonl(ip_sa->ip_addr.addr.in4);
+      ((struct sockaddr_in *)sa)->sin_addr.s_addr = htonl(ip_sa->ip_addr.addr.in4); //mefi84 Umkehren 195.186.4.101=>101.4.186.195
       ((struct sockaddr_in *)sa)->sin_port = htons(ip_sa->port);
 #ifdef SIN6_LEN
       ((struct sockaddr_in *)sa)->sin_len = sizeof (struct sockaddr_in);

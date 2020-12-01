@@ -162,7 +162,7 @@ struct NCR_Instance_Record {
      relative to the local clock.  We modify this in accordance with
      local clock frequency/offset changes, and use this for computing
      statistics about the source when a return packet arrives. */
-  NTP_int64 local_ntp_tx;
+  NTP_int64 local_ntp_tx; //mefi84 SCION Anpassung hier :-D
   NTP_Local_Timestamp local_tx;
 
   /* Previous values of some variables needed in interleaved mode */
@@ -243,7 +243,7 @@ static ARR_Instance broadcasts;
 #define NTP_MAX_DISPERSION 16.0
 
 /* Maximum allowed time for server to process client packet */
-#define MAX_SERVER_INTERVAL 4.0
+#define MAX_SERVER_INTERVAL 3600.0 //#define MAX_SERVER_INTERVAL 4.0 //mefi84 angepasst zu debuggi Zwecken
 
 /* Maximum acceptable delay in transmission for timestamp correction */
 #define MAX_TX_DELAY 1.0
@@ -313,8 +313,8 @@ do_size_checks(void)
   assert(sizeof(NTP_int64) == 8);
 
   /* Check offsets of all fields in the NTP packet format */
-  assert(offsetof(NTP_Packet, lvm)             ==  0);
-  assert(offsetof(NTP_Packet, stratum)         ==  1);
+  assert(offsetof(NTP_Packet, lvm)             ==  0); //mefi84 offsetof()==the offset in bytes of a structure member from the beginning of the structure.
+  assert(offsetof(NTP_Packet, stratum)         ==  1); //.....wohl nur zur Kontrolle des structs NTP_Packet....
   assert(offsetof(NTP_Packet, poll)            ==  2);
   assert(offsetof(NTP_Packet, precision)       ==  3);
   assert(offsetof(NTP_Packet, root_delay)      ==  4);
@@ -454,11 +454,11 @@ start_initial_timeout(NCR_Instance inst)
   /* In case the offline period was too short, adjust the delay to keep
      the interval between packets at least as long as the current polling
      interval */
-  SCH_GetLastEventTime(&now, NULL, NULL);
+  SCH_GetLastEventTime(&now, NULL, NULL); //mefi84 last select().... offline period?... jop... minimum so lange
   last_tx = UTI_DiffTimespecsToDouble(&now, &inst->local_tx.ts);
   if (last_tx < 0.0)
     last_tx = 0.0;
-  delay = get_transmit_delay(inst, 0, 0.0) - last_tx;
+  delay = get_transmit_delay(inst, 0, 0.0) - last_tx; //mefi84 get_transmit_delay() entspricht poll-interval (zumindest als Client beim ersten Aufruf)
   if (delay < INITIAL_DELAY)
     delay = INITIAL_DELAY;
 
@@ -515,7 +515,7 @@ NCR_CreateInstance(NTP_Remote_Address *remote_addr, NTP_Source_Type type,
   result->local_addr.if_index = INVALID_IF_INDEX;
 
   switch (type) {
-    case NTP_SERVER:
+    case NTP_SERVER: //mefi84 we add an NTP server, WE ARE THE CLIENT!
       /* Client socket will be obtained when sending request */
       result->local_addr.sock_fd = INVALID_SOCK_FD;
       result->mode = MODE_CLIENT;
@@ -645,7 +645,7 @@ NCR_DestroyInstance(NCR_Instance instance)
 void
 NCR_StartInstance(NCR_Instance instance)
 {
-  instance->tx_suspended = 0;
+  instance->tx_suspended = 0; //mefi84Boolean indicating we can't transmit yet... i.e. 1 = we can???
   if (instance->opmode != MD_OFFLINE)
     start_initial_timeout(instance);
 }
@@ -700,7 +700,7 @@ NCR_ResetPoll(NCR_Instance instance)
 void
 NCR_ChangeRemoteAddress(NCR_Instance inst, NTP_Remote_Address *remote_addr, int ntp_only)
 {
-  memset(&inst->report, 0, sizeof (inst->report));
+  memset(&inst->report, 0, sizeof (inst->report)); //mefi84 alles zurücksetzten da IP ändert == anderer NTP server
   NCR_ResetInstance(inst);
 
   /* Update the authentication-specific address before NTP address */
@@ -806,9 +806,9 @@ get_transmit_poll(NCR_Instance inst)
 }
 
 /* ================================================== */
-
+//mefi84 Hat nichts mit "RTT" zu tun sondern mit Pollintervall
 static double
-get_transmit_delay(NCR_Instance inst, int on_tx, double last_tx)
+get_transmit_delay(NCR_Instance inst, int on_tx, double last_tx) 
 {
   int poll_to_use, stratum_diff;
   double delay_time;
@@ -825,7 +825,7 @@ get_transmit_delay(NCR_Instance inst, int on_tx, double last_tx)
      we're in client/server mode, we don't care what poll interval the
      server responded with last time. */
 
-  poll_to_use = get_transmit_poll(inst);
+  poll_to_use = get_transmit_poll(inst); //mefi84 poll_to_use=log2(TX_interval==delay_time)
   delay_time = UTI_Log2ToDouble(poll_to_use);
 
   switch (inst->opmode) {
@@ -835,7 +835,7 @@ get_transmit_delay(NCR_Instance inst, int on_tx, double last_tx)
     case MD_ONLINE:
       switch(inst->mode) {
         case MODE_CLIENT:
-          if (inst->presend_done)
+          if (inst->presend_done) //mefi84 The presend packet has been sent
             delay_time = WARM_UP_DELAY;
           break;
 
@@ -963,10 +963,10 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
 
   /* Get an initial transmit timestamp.  A more accurate timestamp will be
      taken later in this function. */
-  SCH_GetLastEventTime(&local_transmit, NULL, NULL);
+  SCH_GetLastEventTime(&local_transmit, NULL, NULL); //mefi84 Das ist nur last select()-return.... warum überhaupt "falschen" TS hinzufügen?
 
   if (my_mode == MODE_CLIENT) {
-    /* Don't reveal local time or state of the clock in client packets */
+    /* Don't reveal local time or state of the clock in client packets */ //mefi84 gemäss Security vorgaben RFC
     precision = 32;
     leap_status = our_stratum = our_ref_id = 0;
     our_root_delay = our_root_dispersion = 0.0;
@@ -1007,7 +1007,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   }
 
   /* Generate transmit packet */
-  message.lvm = NTP_LVM(leap_status, version, my_mode);
+  message.lvm = NTP_LVM(leap_status, version, my_mode); //mefi84 NTP packet fields: LeapIndicator(2)||VersionNumber(3)||Mode(3)
   /* Stratum 16 and larger are invalid */
   if (our_stratum < NTP_MAX_STRATUM) {
     message.stratum = our_stratum;
@@ -1052,7 +1052,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
   }
 
   do {
-    if (!parse_packet(&message, NTP_HEADER_LENGTH, &info))
+    if (!parse_packet(&message, NTP_HEADER_LENGTH, &info)) //mefi84 DummyTest zumindest beim ersten Durchgang
       return 0;
 
     /* Prepare random bits which will be added to the transmit timestamp */
@@ -1071,7 +1071,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
 
     /* Generate the authentication data */
     if (auth) {
-      if (!NAU_GenerateRequestAuth(auth, &message, &info)) {
+      if (!NAU_GenerateRequestAuth(auth, &message, &info)) { //mefi84 macht nichts bei NTP_AUTH_NONE
         DEBUG_LOG("Could not generate request auth");
         return 0;
       }
@@ -1100,9 +1100,9 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
     return 0;
   }
 
-  /* If the transmit timestamp will be saved, get an even more
+  /* If the transmit timestamp will be saved, get an even more 
      accurate daemon timestamp closer to the transmission */
-  if (local_tx)
+  if (local_tx) //mefi84 ergibt wohl den exaktesten DEAMON-TS der möglich ist... BEACHTE: Wird nicht in Paket geschreieben sondern --siehe oben->(RESULT : TX time of this packet)
     LCL_ReadCookedTime(&local_transmit, &local_transmit_err);
 
   ret = NIO_SendPacket(&message, where_to, from, info.length, local_tx != NULL);
@@ -1125,7 +1125,7 @@ transmit_packet(NTP_Mode my_mode, /* The mode this machine wants to be */
 
 /* ================================================== */
 /* Timeout handler for transmitting to a source. */
-
+//mefi84 Sendet ein Packet weil es gemäss Timeout an der Zeit ist (hat nichts mit Senden das "zu Timeout führte" zu tun)
 static void
 transmit_timeout(void *arg)
 {
@@ -1165,7 +1165,7 @@ transmit_timeout(void *arg)
   DEBUG_LOG("Transmit timeout for %s", UTI_IPSockAddrToString(&inst->remote_addr));
 
   /* Prepare authentication */
-  if (!NAU_PrepareRequestAuth(inst->auth)) {
+  if (!NAU_PrepareRequestAuth(inst->auth)) { //mefi84 Relevant falls NTP_AUTH_NTS aktiv
     if (inst->burst_total_samples_to_go > 0)
       inst->burst_total_samples_to_go--;
     adjust_poll(inst, 0.25);
@@ -1175,7 +1175,7 @@ transmit_timeout(void *arg)
   }
 
   /* Open new client socket */
-  if (inst->mode == MODE_CLIENT) {
+  if (inst->mode == MODE_CLIENT) { //mefi84 Socket wird geschlossen (falls bereits vorhanden, wann möglich?)
     close_client_socket(inst);
     assert(inst->local_addr.sock_fd == INVALID_SOCK_FD);
     inst->local_addr.sock_fd = NIO_OpenClientSocket(&inst->remote_addr);
@@ -1222,7 +1222,7 @@ transmit_timeout(void *arg)
   } else if (inst->presend_done > 0) {
     inst->presend_done--;
   }
-
+  //mefi84 local_tx=="bester sende tx deamon, wird dann durch hw ersetzt", local_ntp_tx==zeitModuloFuzz was im Packet steht
   /* Send the request (which may also be a response in the symmetric mode) */
   sent = transmit_packet(inst->mode, interleaved, inst->local_poll, inst->version, 0,
                          inst->auth,
@@ -1275,7 +1275,7 @@ transmit_timeout(void *arg)
   /* If a client packet was just sent, schedule a timeout to close the socket
      at the time when all server replies would fail the delay test, so the
      socket is not open for longer than necessary */
-  if (inst->mode == MODE_CLIENT)
+  if (inst->mode == MODE_CLIENT) //mefi84 Fügt ein Handler in timer_queue ein, der Socket schliesst falls Sever für x Sekunden nicht antwortet (socket sollte meist bereits geschlossen sein) 
     inst->rx_timeout_id = SCH_AddTimeoutByDelay(inst->max_delay + MAX_SERVER_INTERVAL,
                                                 receive_timeout, (void *)inst);
 }
@@ -1294,7 +1294,7 @@ parse_packet(NTP_Packet *packet, int length, NTP_PacketInfo *info)
   info->version = NTP_LVM_TO_VERSION(packet->lvm);
   info->mode = NTP_LVM_TO_MODE(packet->lvm);
   info->ext_fields = 0;
-  info->auth.mode = NTP_AUTH_NONE;
+  info->auth.mode = NTP_AUTH_NONE; //mefi84 falls im Einsatz wird es unten geparst
 
   if (info->version < NTP_MIN_COMPAT_VERSION || info->version > NTP_MAX_COMPAT_VERSION) {
     DEBUG_LOG("NTP packet has invalid version %d", info->version);
@@ -1513,7 +1513,7 @@ process_response(NCR_Instance inst, NTP_Local_Address *local_addr,
 
   /* Test 2 checks for bogus packet in the basic and interleaved modes.  This
      ensures the source is responding to the latest packet we sent to it. */
-  test2n = !UTI_CompareNtp64(&message->originate_ts, &inst->local_ntp_tx);
+  test2n = !UTI_CompareNtp64(&message->originate_ts, &inst->local_ntp_tx); //mefi84 Transmit Timestamp wird von Server 1:1 zurückgegeben
   test2i = inst->interleaved &&
            !UTI_CompareNtp64(&message->originate_ts, &inst->local_ntp_rx);
   test2 = test2n || test2i;
@@ -1529,7 +1529,7 @@ process_response(NCR_Instance inst, NTP_Local_Address *local_addr,
      function is called only for known sources. */
 
   /* Test 5 checks for authentication failure */
-  test5 = NAU_CheckResponseAuth(inst->auth, message, info);
+  test5 = NAU_CheckResponseAuth(inst->auth, message, info); //mefi84 nothing here as AUTH not used at the moment
 
   /* Test 6 checks for unsynchronised server */
   test6 = pkt_leap != LEAP_Unsynchronised &&

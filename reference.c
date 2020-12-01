@@ -210,11 +210,11 @@ REF_Initialise(void)
   drift_file_age = 0.0;
 
   /* Now see if we can get the drift file opened */
-  drift_file = CNF_GetDriftFile();
+  drift_file = CNF_GetDriftFile(); //mefi84 driftfile Config
   if (drift_file) {
     in = UTI_OpenFile(NULL, drift_file, NULL, 'r', 0);
     if (in) {
-      if (fscanf(in, "%lf%lf", &file_freq_ppm, &file_skew_ppm) == 2) {
+      if (fscanf(in, "%lf%lf", &file_freq_ppm, &file_skew_ppm) == 2) { //mefi84 Two parameters are recorded in the file. The first is the rate at which the system clock gains or loses time, expressed in parts per million, with gains positive. Therefore, a value of 100.0 indicates that when the system clock has advanced by a second, it has gained 100 microseconds in reality (so the true time has only advanced by 999900 microseconds). The second is an estimate of the error bound around the first value in which the true rate actually lies.
         /* We have read valid data */
         our_frequency_ppm = file_freq_ppm;
         our_skew = 1.0e-6 * file_skew_ppm;
@@ -242,17 +242,17 @@ REF_Initialise(void)
       "   Date (UTC) Time     IP Address   St   Freq ppm   Skew ppm     Offset L Co  Offset sd Rem. corr. Root delay Root disp. Max. error")
     : -1;
 
-  max_update_skew = fabs(CNF_GetMaxUpdateSkew()) * 1.0e-6;
+  max_update_skew = fabs(CNF_GetMaxUpdateSkew()) * 1.0e-6; //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#maxupdateskew 
 
-  correction_time_ratio = CNF_GetCorrectionTimeRatio();
+  correction_time_ratio = CNF_GetCorrectionTimeRatio(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#corrtimeratio
 
-  enable_local_stratum = CNF_AllowLocalReference(&local_stratum, &local_orphan, &local_distance);
+  enable_local_stratum = CNF_AllowLocalReference(&local_stratum, &local_orphan, &local_distance); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#local
   UTI_ZeroTimespec(&local_ref_time);
 
   leap_when = 0;
   leap_timeout_id = 0;
   leap_in_progress = 0;
-  leap_mode = CNF_GetLeapSecMode();
+  leap_mode = CNF_GetLeapSecMode(); //mefi84 leapsecmode
   /* Switch to step mode if the system driver doesn't support leap */
   if (leap_mode == REF_LeapModeSystem && !LCL_CanSystemLeap())
     leap_mode = REF_LeapModeStep;
@@ -271,10 +271,10 @@ REF_Initialise(void)
 
   CNF_GetMakeStep(&make_step_limit, &make_step_threshold);
   CNF_GetMaxChange(&max_offset_delay, &max_offset_ignore, &max_offset);
-  CNF_GetMailOnChange(&do_mail_change, &mail_change_threshold, &mail_change_user);
-  log_change_threshold = CNF_GetLogChange();
+  CNF_GetMailOnChange(&do_mail_change, &mail_change_threshold, &mail_change_user); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#mailonchange
+  log_change_threshold = CNF_GetLogChange(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#logchange
 
-  CNF_GetFallbackDrifts(&fb_drift_min, &fb_drift_max);
+  CNF_GetFallbackDrifts(&fb_drift_min, &fb_drift_max); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#fallbackdrift
 
   if (fb_drift_max >= fb_drift_min && fb_drift_min > 0) {
     fb_drifts = MallocArray(struct fb_drift, fb_drift_max - fb_drift_min + 1);
@@ -329,7 +329,7 @@ REF_GetMode(void)
 /* ================================================== */
 
 void
-REF_SetModeEndHandler(REF_ModeEndHandler handler)
+REF_SetModeEndHandler(REF_ModeEndHandler handler) //mefi84 Registriert wird: main.c::reference_mode_end
 {
   mode_end_handler = handler;
 }

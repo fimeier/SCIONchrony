@@ -37,7 +37,7 @@
 #define NSEC_PER_SEC 1000000000
 
 /* ================================================== */
-
+//mefi84 Setzt alles 0
 void
 UTI_ZeroTimespec(struct timespec *ts)
 {
@@ -92,7 +92,7 @@ UTI_DoubleToTimespec(double d, struct timespec *ts)
 /* ================================================== */
 
 void
-UTI_NormaliseTimespec(struct timespec *ts)
+UTI_NormaliseTimespec(struct timespec *ts) //mefi84 analysieren ob das Sinn macht ;-) ALLGEMEIN: Kann es "Rundungsprobleme" geben durch das Umwandeln "Timespec <=> Double".... Vermutug JA, WARUM sollte man sonst timespec nu
 {
   if (ts->tv_nsec >= NSEC_PER_SEC || ts->tv_nsec < 0) {
     ts->tv_sec += ts->tv_nsec / NSEC_PER_SEC;
@@ -190,7 +190,7 @@ UTI_AddDoubleToTimespec(const struct timespec *start, double increment, struct t
 
   int_part = increment;
   end->tv_sec = start->tv_sec + int_part;
-  end->tv_nsec = start->tv_nsec + 1.0e9 * (increment - int_part);
+  end->tv_nsec = start->tv_nsec + 1.0e9 * (increment - int_part); //mefi84 Funktioniert, da beim int_part alles nach dem Komma fehlt
   UTI_NormaliseTimespec(end);
 }
 
@@ -657,7 +657,7 @@ UTI_CompareNtp64(const NTP_int64 *a, const NTP_int64 *b)
 {
   int32_t diff;
 
-  if (a->hi == b->hi && a->lo == b->lo)
+  if (a->hi == b->hi && a->lo == b->lo) //mefi a==b
     return 0;
 
   diff = ntohl(a->hi) - ntohl(b->hi);
@@ -993,7 +993,7 @@ UTI_FdSetCloexec(int fd)
 /* ================================================== */
 
 void
-UTI_SetQuitSignalsHandler(void (*handler)(int), int ignore_sigpipe)
+UTI_SetQuitSignalsHandler(void (*handler)(int), int ignore_sigpipe) //mefi84 setzt primär sched.c::need_to_exit über main.c::signal_cleanup
 {
   struct sigaction sa;
 
@@ -1022,7 +1022,7 @@ UTI_SetQuitSignalsHandler(void (*handler)(int), int ignore_sigpipe)
   if (ignore_sigpipe)
     sa.sa_handler = SIG_IGN;
 
-  if (sigaction(SIGPIPE, &sa, NULL) < 0)
+  if (sigaction(SIGPIPE, &sa, NULL) < 0) //mefi84 NUR dieses Signal wird ignoriert falls ignore_sigpipe==1
     LOG_FATAL("sigaction(%d) failed", SIGPIPE);
 }
 

@@ -101,7 +101,7 @@ KEY_Initialise(void)
 {
   keys = ARR_CreateInstance(sizeof (Key));
   cache_valid = 0;
-  KEY_Reload();
+  KEY_Reload(); //mefi84 only if using keyfile: https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#keyfile
 }
 
 /* ================================================== */
@@ -176,7 +176,7 @@ KEY_Reload(void)
 
   free_keys();
 
-  key_file = CNF_GetKeysFile();
+  key_file = CNF_GetKeysFile(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#keyfile
   line_number = 0;
 
   if (!key_file)

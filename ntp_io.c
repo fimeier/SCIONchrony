@@ -95,23 +95,23 @@ open_socket(int family, int local_port, int client_only, IPSockAddr *remote_addr
     iface = CNF_GetBindNtpInterface();
   } else {
     CNF_GetBindAcquisitionAddress(family, &local_addr.ip_addr);
-    iface = CNF_GetBindAcquisitionInterface();
+    iface = CNF_GetBindAcquisitionInterface(); //mefi84 erlaubt client socket auf spezifisches device zu binden https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#bindacqdevice
   }
 
   local_addr.port = local_port;
 
-  sock_flags = SCK_FLAG_RX_DEST_ADDR | SCK_FLAG_PRIV_BIND;
+  sock_flags = SCK_FLAG_RX_DEST_ADDR | SCK_FLAG_PRIV_BIND; //mefi84 unklar was diese Flags sollen..insbesondere die Anwendung in open_ip_socket()::open_socket() etc... WIRD missbraucht: Zusätzliche Funktionen werten diese Parameter aus und setzten dann die korrekten Flags gemäss man7.org ;-)
   if (!client_only)
     sock_flags |= SCK_FLAG_BROADCAST;
 
-  sock_fd = SCK_OpenUdpSocket(remote_addr, &local_addr, iface, sock_flags);
+  sock_fd = SCK_OpenUdpSocket(remote_addr, &local_addr, iface, sock_flags); //mefi84 zB für CNF_SetupAddessRestrictions ie open server port: sudo lsof -n -P | grep ":123"
   if (sock_fd < 0) {
     if (!client_only)
       LOG(LOGS_ERR, "Could not open NTP socket on %s", UTI_IPSockAddrToString(&local_addr));
     return INVALID_SOCK_FD;
   }
 
-  dscp = CNF_GetNtpDscp();
+  dscp = CNF_GetNtpDscp(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#dscp
   if (dscp > 0 && dscp < 64) {
 #ifdef IP_TOS
     if (!SCK_SetIntOption(sock_fd, IPPROTO_IP, IP_TOS, dscp << 2))
@@ -124,7 +124,7 @@ open_socket(int family, int local_port, int client_only, IPSockAddr *remote_addr
 
   /* Enable kernel/HW timestamping of packets */
 #ifdef HAVE_LINUX_TIMESTAMPING
-  if (!NIO_Linux_SetTimestampSocketOptions(sock_fd, client_only, &events))
+  if (!NIO_Linux_SetTimestampSocketOptions(sock_fd, client_only, &events)) //mefi84 (bsp Komm mit NTPServer) aktiviert Flags und fügt event SCH_FILE_EXCEPTION hinzu (vermutlich um TS per err-queue zu lesen)
 #endif
     if (!SCK_EnableKernelRxTimestamping(sock_fd))
       ;
@@ -138,7 +138,7 @@ open_socket(int family, int local_port, int client_only, IPSockAddr *remote_addr
 /* ================================================== */
 
 static int
-open_separate_client_socket(IPSockAddr *remote_addr)
+open_separate_client_socket(IPSockAddr *remote_addr) //mefi84 SCIONCHANGE needed
 {
   return open_socket(remote_addr->ip_addr.family, 0, 1, remote_addr);
 }
@@ -248,7 +248,7 @@ NIO_Finalise(void)
 /* ================================================== */
 
 int
-NIO_OpenClientSocket(NTP_Remote_Address *remote_addr)
+NIO_OpenClientSocket(NTP_Remote_Address *remote_addr) //mefi84 SCION anpassung nötig
 {
   if (separate_client_sockets) {
     return open_separate_client_socket(remote_addr);
@@ -380,7 +380,7 @@ process_message(SCK_Message *message, int sock_fd, int event)
 
 #ifdef HAVE_LINUX_TIMESTAMPING
   if (NIO_Linux_ProcessMessage(message, &local_addr, &local_ts, event))
-    return;
+    return; //mefi84 TX bricht hier immer ab
 #else
   if (!UTI_IsZeroTimespec(&message->timestamp.kernel)) {
     LCL_CookTime(&message->timestamp.kernel, &local_ts.ts, &local_ts.err);
@@ -446,7 +446,7 @@ NIO_SendPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr,
     return 0;
   }
 
-  SCK_InitMessage(&message, SCK_ADDR_IP);
+  SCK_InitMessage(&message, SCK_ADDR_IP); //mefi84 setzt alle 0
 
   message.data = packet;
   message.length = length;
@@ -457,7 +457,7 @@ NIO_SendPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr,
     message.remote_addr.ip.port = remote_addr->port;
   }
 
-  message.local_addr.ip = local_addr->ip_addr;
+  message.local_addr.ip = local_addr->ip_addr; //mefi84 warum steht hier crap drin? Wird nicht gesetzt in transmit_timeout->transmit_packet->NIOSendPacket OK wenn family=IPADDR_UNSPEC
 
   /* Don't require responses to non-link-local addresses to use the same
      interface */
@@ -473,7 +473,7 @@ NIO_SendPacket(NTP_Packet *packet, NTP_Remote_Address *remote_addr,
 
 #ifdef HAVE_LINUX_TIMESTAMPING
   if (process_tx)
-    NIO_Linux_RequestTxTimestamp(&message, local_addr->sock_fd);
+    NIO_Linux_RequestTxTimestamp(&message, local_addr->sock_fd); //mefi84 irreführend: Für Clients setzt es monitored_socket = sock_fd um auf HW TS zu warten
 #endif
 
   if (!SCK_SendMessage(local_addr->sock_fd, &message, 0))

@@ -9,7 +9,7 @@
 core.*
 tags
 /RELEASES
-/Makefile
+#/Makefile
 /chronyc
 /chronyd
 /config.h
@@ -26,3 +26,4 @@ tags
 /test/unit/Makefile
 /test/unit/*.test
 /test/unit/*.o
+/logs

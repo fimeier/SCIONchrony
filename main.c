@@ -58,6 +58,8 @@
 #include "tempcomp.h"
 #include "util.h"
 
+#include "scion.h" //mefi84 SCION
+
 /* ================================================== */
 
 /* Set when the initialisation chain has been completed.  Prevents finalisation
@@ -164,9 +166,9 @@ quit_timeout(void *arg)
 /* ================================================== */
 
 static void
-ntp_source_resolving_end(void)
+ntp_source_resolving_end(void) //mefi84 Hier vermutlich NTP start.... NTP-Server wurde als letztes erfolgreich aufgelöst (Name=>IP)
 {
-  NSR_SetSourceResolvingEndHandler(NULL);
+  NSR_SetSourceResolvingEndHandler(NULL); //mefi84 entfernt sich quasi selber...
 
   if (reload) {
     /* Note, we want reload to come well after the initialisation from
@@ -176,15 +178,15 @@ ntp_source_resolving_end(void)
     SRC_ReloadSources();
   }
 
-  SRC_RemoveDumpFiles();
-  RTC_StartMeasurements();
-  RCL_StartRefclocks();
-  NSR_StartSources();
-  NSR_AutoStartSources();
+  SRC_RemoveDumpFiles(); //mefi84 "Not in Use" erst relevant wenn... https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#dumpdir
+  RTC_StartMeasurements(); //mefi84 "Not in Use" -s Option wäre nötig "Set clock from RTC"
+  RCL_StartRefclocks(); //mefi84 "Not in Use"reference clocks: https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#refclock
+  NSR_StartSources(); //mefi84 startet für alle server transmit_timeout() bzw registriert Timeouts so dass diese gestartet werden
+  NSR_AutoStartSources(); //mefi84 auto_start_sources=1; Flag indicating new sources will be started automatically when added
 
   /* Special modes can end only when sources update their reachability.
      Give up immediatelly if there are no active sources. */
-  if (ref_mode != REF_ModeNormal && !SRC_ActiveSources()) {
+  if (ref_mode != REF_ModeNormal && !SRC_ActiveSources()) { //mefi84 irrelevant
     REF_SetUnsynchronised();
   }
 }
@@ -204,11 +206,11 @@ post_init_ntp_hook(void *anything)
   /* Close the pipe to the foreground process so it can exit */
   LOG_CloseParentFd();
 
-  CNF_AddSources();
+  CNF_AddSources(); //mefi84 fügt NTPsource static struct SRC_Instance_Record **sources bei sources.c hinzu
   CNF_AddBroadcasts();
 
   NSR_SetSourceResolvingEndHandler(ntp_source_resolving_end);
-  NSR_ResolveSources();
+  NSR_ResolveSources(); //mefi84 starte DNS_Name2IPAddressAsync() und registriert handler.... löst ntpServer DNS Namen auf
 }
 
 /* ================================================== */
@@ -439,9 +441,15 @@ int main
   int clock_control = 1, system_log = 1, log_severity = LOGS_INFO;
   int user_check = 1, config_args = 0, print_config = 0;
 
-  do_platform_checks();
+  do_platform_checks(); //mefi84 Require at least 32-bit integers, two's complement representation and the usual implementation of conversion of unsigned integers
 
   LOG_Initialise();
+
+
+  printf("Hello I am a debugging entry !!!! really. 99999999999.......\n");
+  SCION_TestCall(42);
+
+
 
   /* Parse long command-line options */
   for (optind = 1; optind < argc; optind++) {
@@ -454,6 +462,7 @@ int main
     }
   }
 
+
   optind = 1;
 
   /* Parse short command-line options */
@@ -461,7 +470,7 @@ int main
     switch (opt) {
       case '4':
       case '6':
-        address_family = opt == '4' ? IPADDR_INET4 : IPADDR_INET6;
+        address_family = opt == '4' ? IPADDR_INET4 : IPADDR_INET6; //mefi84 SCION add something...
         break;
       case 'd':
         debug++;
@@ -542,6 +551,8 @@ int main
   if (user_check && getuid() != 0)
     LOG_FATAL("Not superuser");
 
+  printf("getuid()=%d\n",getuid());
+
   /* Turn into a daemon */
   if (!nofork) {
     go_daemon();
@@ -557,16 +568,16 @@ int main
   
   LOG(LOGS_INFO, "chronyd version %s starting (%s)", CHRONY_VERSION, CHRONYD_FEATURES);
 
-  DNS_SetAddressFamily(address_family);
-
-  CNF_Initialise(restarted, client_only);
+  DNS_SetAddressFamily(address_family); //mefi84 SCION add something...
+  //mefi CNF==CoNFiguration file
+  CNF_Initialise(restarted, client_only); //mefi84 get some memory and initialize some IP's to 0.0.0.0
   if (print_config)
     CNF_EnablePrint();
 
   /* Parse the config file or the remaining command line arguments */
   config_args = argc - optind;
   if (!config_args) {
-    CNF_ReadFile(conf_file);
+    CNF_ReadFile(conf_file); //mefi84 Config File ReadIn
   } else {
     for (; optind < argc; optind++)
       CNF_ParseLine(NULL, config_args + optind - argc + 1, argv[optind]);
@@ -576,97 +587,99 @@ int main
     return 0;
 
   /* Check whether another chronyd may already be running */
-  check_pidfile();
+  check_pidfile(); //mefi84 "irrelevant"
 
   if (!user)
-    user = CNF_GetUser();
+    user = CNF_GetUser(); //mefi default ist root
 
   pw = getpwnam(user);
   if (!pw)
     LOG_FATAL("Could not get user/group ID of %s", user);
 
   /* Create directories for sockets, log files, and dump files */
-  CNF_CreateDirs(pw->pw_uid, pw->pw_gid);
+  CNF_CreateDirs(pw->pw_uid, pw->pw_gid); //mefi84 "irrelevant"
 
   /* Write our pidfile to prevent other instances from running */
   write_pidfile();
 
   PRV_Initialise();
-  LCL_Initialise();
-  SCH_Initialise();
-  SCK_Initialise(address_family);
+  LCL_Initialise(); //mefi common local (system) clock interface: Scheint noch nicht viel zu tun (ausser measure_clock_precision() wobei hier nur schnell hintereinander System Time abgefragt wird: kürzestes Intervall==Precision)
+  SCH_Initialise(); //mefi scheduling loop and the timeout queue.
+  SCK_Initialise(address_family); //mefi Socket Operations!!! Prüft ob SOCK_CLOEXEC und SOCK_NONBLOCK supported ist
 
   /* Start helper processes if needed */
   NKS_PreInitialise(pw->pw_uid, pw->pw_gid, scfilter_level);
 
-  SYS_Initialise(clock_control);
-  RTC_Initialise(do_init_rtc);
-  SRC_Initialise();
-  RCL_Initialise();
-  KEY_Initialise();
+  SYS_Initialise(clock_control); //mefi84 init of system stuff specific for LINUX according to preprocessing
+  RTC_Initialise(do_init_rtc); //mefi84 nothing here...
+  SRC_Initialise(); //mefi84 sources for NTP...
+  RCL_Initialise(); //mefi reference clocks: https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#refclock
+  KEY_Initialise(); //mefi keys used for authenticating NTP packets (vermutlich irrelevant, fixe Keys für MAC)
 
   /* Open privileged ports before dropping root */
-  CAM_Initialise();
-  NIO_Initialise();
-  NCR_Initialise();
-  CNF_SetupAccessRestrictions();
+  CAM_Initialise(); //mefi84 CAM == Command And Monitoring module in the main program !!! chronyc stuff... port 323
+  NIO_Initialise(); //mefi NIO and HW Timestamping.... IO aspects of reading and writing NTP packets. PRIMÄR:fügt für ausgewählte NICs PHC interface (PTP) hinzu, d.h. HW-CLock im NIC
+  NCR_Initialise(); //mefi Core NTP protocol engine
+  CNF_SetupAccessRestrictions(); //mefi84 einschränkungen gemäss allow auf server port 123 (ntp) anwenden und socket öffnen
 
   /* Command-line switch must have priority */
-  if (!sched_priority) {
+  if (!sched_priority) { //mefi 0 doesn't count, would also be wrong
     sched_priority = CNF_GetSchedPriority();
   }
   if (sched_priority) {
     SYS_SetScheduler(sched_priority);
   }
 
-  if (lock_memory || CNF_GetLockMemory()) {
+  if (lock_memory || CNF_GetLockMemory()) { //mefi84 "lock_all" in config file => uses the POSIX mlockall() system call to prevent chronyd from ever being swapped out. This should result in lower and more consistent latency.
     SYS_LockMemory();
   }
 
-  /* Drop root privileges if the specified user has a non-zero UID */
+  /* Drop root privileges if the specified user has a non-zero UID */ //mefi fake user is also root -Q option
   if (!geteuid() && (pw->pw_uid || pw->pw_gid))
     SYS_DropRoot(pw->pw_uid, pw->pw_gid, SYS_MAIN_PROCESS);
 
-  REF_Initialise();
-  SST_Initialise();
-  NSR_Initialise();
-  NSD_Initialise();
-  NNS_Initialise();
-  NKS_Initialise();
-  CLG_Initialise();
-  MNL_Initialise();
-  TMC_Initialise();
-  SMT_Initialise();
+  REF_Initialise(); //mefi84 keeps track of the source which we are claiming to be our reference, for the purposes of generating outgoing NTP packets
+  SST_Initialise(); //mefi statistical analysis on the samples obtained from the sources, to determined frequencies and error bounds
+  NSR_Initialise(); //mefi84 manage the pool of NTP sources that we are currently a client of
+  NSD_Initialise(); //mefi84 INACTIVE: Support for MS-SNTP authentication in Samba (ntp_signd)
+  NNS_Initialise(); //mefi84 INACTIVE: Server NTS-NTP authentication
+  NKS_Initialise(); //mefi84 INACTIVE:NTS-KE server
+  CLG_Initialise(); //mefi84   This module keeps a count of the number of successful accesses by clients, and the times of the last accesses.
+  MNL_Initialise(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#manual
+  TMC_Initialise(); //mefi84 INACTIVE: https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#tempcomp
+  SMT_Initialise(); //mefi84 INACTIVE: https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#smoothtime
 
   /* From now on, it is safe to do finalisation on exit */
   initialised = 1;
 
-  UTI_SetQuitSignalsHandler(signal_cleanup, 1);
+  UTI_SetQuitSignalsHandler(signal_cleanup, 1); //mefi84 setzt primär flag sched.c::need_to_exit
 
-  CAM_OpenUnixSocket();
+  CAM_OpenUnixSocket(); //mefi84 var/run/chrony/chronyd.sock unix socket wird geöffnet und filehandler registriert
 
-  if (scfilter_level)
+  if (scfilter_level) //mefi84 -F option https://chrony.tuxfamily.org/faq.html#_how_can_i_make_chronyd_more_secure
     SYS_EnableSystemCallFilter(scfilter_level, SYS_MAIN_PROCESS);
 
   if (ref_mode == REF_ModeNormal && CNF_GetInitSources() > 0) {
     ref_mode = REF_ModeInitStepSlew;
   }
 
-  REF_SetModeEndHandler(reference_mode_end);
+  REF_SetModeEndHandler(reference_mode_end); //mefi84 registirert handler
   REF_SetMode(ref_mode);
 
-  if (timeout >= 0)
+  if (timeout >= 0) //mefi84 -t Parameter: exit after t seconds
     SCH_AddTimeoutByDelay(timeout, quit_timeout, NULL);
 
-  if (do_init_rtc) {
+  if (do_init_rtc) { //mefi84 -s Parameter: Set clock from RTC\n"
     RTC_TimeInit(post_init_rtc_hook, NULL);
   } else {
-    post_init_rtc_hook(NULL);
+    post_init_rtc_hook(NULL); //mefi85 ruft auch post_init_ntp_hook() auf
   }
 
   /* The program normally runs under control of the main loop in
      the scheduler. */
   SCH_MainLoop();
+
+  printf("mefi: chronyd exiting\n"); //mefi my printf
 
   LOG(LOGS_INFO, "chronyd exiting");
 

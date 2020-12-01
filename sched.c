@@ -59,7 +59,7 @@ typedef struct {
   int                   events;
 } FileHandlerEntry;
 
-static ARR_Instance file_handlers;
+static ARR_Instance file_handlers; //mefi84 CNF_SetupAccessRestrictions::SCH_AddFileHandler => Server ntp Socket 123 wird hier zb hinzugefügt
 
 /* Timestamp when last select() returned */
 static struct timespec last_select_ts, last_select_ts_raw;
@@ -92,7 +92,7 @@ typedef struct _TimerQueueEntry
   SCH_TimeoutID id;             /* ID to allow client to delete
                                    timeout */
   SCH_TimeoutClass class;       /* The class that the epoch is in */
-  SCH_TimeoutHandler handler;   /* The handler routine to use */
+  SCH_TimeoutHandler handler;   /* The handlrker routine to use */
   SCH_ArbitraryArgument arg;    /* The argument to pass to the handler */
 
 } TimerQueueEntry;
@@ -138,7 +138,7 @@ SCH_Initialise(void)
 
   need_to_exit = 0;
 
-  LCL_AddParameterChangeHandler(handle_slew, NULL);
+  LCL_AddParameterChangeHandler(handle_slew, NULL); //mefi84 unklar was genau Aufgabe des Handle ist
 
   LCL_ReadRawTime(&last_select_ts_raw);
   last_select_ts = last_select_ts_raw;
@@ -164,7 +164,7 @@ SCH_Finalise(void) {
 
 void
 SCH_AddFileHandler
-(int fd, int events, SCH_FileHandler handler, SCH_ArbitraryArgument arg)
+(int fd, int events, SCH_FileHandler handler, SCH_ArbitraryArgument arg) //mefi84 CNF_SetupAccessRestrictions::SCH_AddFileHandler => Server ntp Socket 123 wird hier zb hinzugefügt, cmdmon.c read_from_cmd_socket, DNS_Name2IPAddressAsync(), read_from_socket(),
 {
   FileHandlerEntry *ptr;
 
@@ -202,7 +202,7 @@ SCH_AddFileHandler
 /* ================================================== */
 
 void
-SCH_RemoveFileHandler(int fd)
+SCH_RemoveFileHandler(int fd) //mefi84 entfernt fd primär aus Liste
 {
   FileHandlerEntry *ptr;
 
@@ -520,7 +520,7 @@ dispatch_timeouts(struct timespec *now) {
 
     SCH_RemoveTimeout(ptr->id);
 
-    /* Dispatch the handler */
+    /* Dispatch the handler */ //mefi84 HIER wird Aktion ausgeführt!!!!!!!!
     (handler)(arg);
 
     /* Increment count of timeouts handled */
@@ -548,7 +548,7 @@ dispatch_filehandlers(int nfd, fd_set *read_fds, fd_set *write_fds, fd_set *exce
   FileHandlerEntry *ptr;
   int fd;
   
-  for (fd = 0; nfd && fd < one_highest_fd; fd++) {
+  for (fd = 0; nfd && fd < one_highest_fd; fd++) { //mefi84 man geht alle FD's durch...
     if (except_fds && FD_ISSET(fd, except_fds)) {
       /* This descriptor has an exception, dispatch its handler */
       ptr = (FileHandlerEntry *)ARR_GetElement(file_handlers, fd);
@@ -636,15 +636,15 @@ fill_fd_sets(fd_set **read_fds, fd_set **write_fds, fd_set **except_fds)
       continue;
 
     if (events & SCH_FILE_INPUT) {
-      if (!rd) {
+      if (!rd) { //mefi84 Beim ersten event wird rd so gesetzt, dass die daten in read_fds landen und somit zurückgegeben werden können
         rd = *read_fds;
         FD_ZERO(rd);
       }
-      FD_SET(i, rd);
+      FD_SET(i, rd); //mefi84 z.B. i=3 => 1000 setzt (i+1)-Bit auf eins.... Falls Descriptoren z.B im Range 0-31 so können diese in einem Int codiert werden
     }
 
     if (events & SCH_FILE_OUTPUT) {
-      if (!wr) {
+      if (!wr) { //mefi84 analog für write
         wr = *write_fds;
         FD_ZERO(wr);
       }
@@ -685,7 +685,7 @@ check_current_time(struct timespec *prev_raw, struct timespec *raw, int timeout,
   /* Get an estimate of the time spent waiting in the select() call. On some
      systems (e.g. Linux) the timeout timeval is modified to return the
      remaining time, use that information. */
-  if (timeout) {
+  if (timeout) { //mefi84 falls z.B. select() nichts zurückgegeben hat und aufgrund eines Timeouts zurückkehrte
     elapsed_max = elapsed_min = orig_select_ts;
   } else if (rem_select_tv && rem_select_tv->tv_sec >= 0 &&
              rem_select_tv->tv_sec <= orig_select_tv->tv_sec &&
@@ -756,12 +756,13 @@ SCH_MainLoop(void)
   fd_set *p_read_fds, *p_write_fds, *p_except_fds;
   int status, errsv;
   struct timeval tv, saved_tv, *ptv;
-  struct timespec ts, now, saved_now, cooked;
+  struct timespec ts, now, saved_now, cooked; //mefi84 like a `struct timeval' but has nanoseconds instead of microseconds.
   double err;
 
   assert(initialised);
 
-  while (!need_to_exit) {
+  while (!need_to_exit) { //mefi84 main.c l651: UTI_SetQuitSignalsHandler
+    LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::While-Loop-Start..."); //mefi
     /* Dispatch timeouts and fill now with current raw time */
     dispatch_timeouts(&now);
     saved_now = now;
@@ -776,8 +777,8 @@ SCH_MainLoop(void)
       assert(ts.tv_sec > 0 || ts.tv_nsec > 0);
 
       UTI_TimespecToTimeval(&ts, &tv);
-      ptv = &tv;
-      saved_tv = tv;
+      ptv = &tv; //mefi84 warum Pointer auf tv??? Vermutlich nur wegen Program logik nötig (ptv = NULL)
+      saved_tv = tv; //mefi84 copy by value
     } else {
       ptv = NULL;
       saved_tv.tv_sec = saved_tv.tv_usec = 0;
@@ -786,22 +787,22 @@ SCH_MainLoop(void)
     p_read_fds = &read_fds;
     p_write_fds = &write_fds;
     p_except_fds = &except_fds;
-    fill_fd_sets(&p_read_fds, &p_write_fds, &p_except_fds);
+    fill_fd_sets(&p_read_fds, &p_write_fds, &p_except_fds); //mefi84 Kodiert FD's
 
     /* if there are no file descriptors being waited on and no
        timeout set, this is clearly ridiculous, so stop the run */
     if (!ptv && !p_read_fds && !p_write_fds)
       LOG_FATAL("Nothing to do");
 
-    status = select(one_highest_fd, p_read_fds, p_write_fds, p_except_fds, ptv);
+    status = select(one_highest_fd, p_read_fds, p_write_fds, p_except_fds, ptv); //mefi84 status==#ready descriptors, ALL sets are changed, only ready FD's remain
     errsv = errno;
 
-    LCL_ReadRawTime(&now);
-    LCL_CookTime(&now, &cooked, &err);
+    LCL_ReadRawTime(&now); //mefi84 time represents seconds and nanoseconds since the Epoch (CLOCK_REALTIME)
+    LCL_CookTime(&now, &cooked, &err); //mefi84 entspricht CLOCK_REALTIME korrigiert um Frequenzabweichung * Duration - ausstehende Offset <======> die beste Zeit die seit letzter Sync unter ausnutzung der Trainingsdaten (Frequency Offset) und unter beachtung der noch fehlenden Anpassungen (da diese zeitverzögert angewendet werden)
 
-    update_monotonic_time(&now, &last_select_ts_raw);
+    update_monotonic_time(&now, &last_select_ts_raw); //mefi84 Passt die beiden Vars oben an.... quasi "logische Zeit" last_select_ts_mono; last_select_ts_mono_ns;
 
-    /* Check if the time didn't jump unexpectedly */
+    /* Check if the time didn't jump unexpectedly */ //mefi84 Entsprichtprimär der Zeit die der select()-call benötigte
     if (!check_current_time(&saved_now, &now, status == 0, &saved_tv, ptv)) {
       /* Cook the time again after handling the step */
       LCL_CookTime(&now, &cooked, &err);
@@ -811,7 +812,7 @@ SCH_MainLoop(void)
     last_select_ts = cooked;
     last_select_ts_err = err;
 
-    if (status < 0) {
+    if (status < 0) { //mefi84 falls select error ==-1 zurückgibt
       if (!need_to_exit && errsv != EINTR) {
         LOG_FATAL("select() failed : %s", strerror(errsv));
       }

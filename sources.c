@@ -1390,7 +1390,7 @@ SRC_RemoveDumpFiles(void)
   glob_t gl;
   size_t i;
 
-  dumpdir = CNF_GetDumpDir();
+  dumpdir = CNF_GetDumpDir(); //mefi84 https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html#dumpdir
   if (!dumpdir ||
       snprintf(pattern, sizeof (pattern), "%s/*.dat", dumpdir) >= sizeof (pattern))
     return;

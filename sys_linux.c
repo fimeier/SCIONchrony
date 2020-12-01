@@ -898,7 +898,7 @@ SYS_Linux_OpenPHC(const char *path, int phc_index)
   if (!path) {
     if (snprintf(phc_path, sizeof (phc_path), "/dev/ptp%d", phc_index) >= sizeof (phc_path))
       return -1;
-    path = phc_path;
+    path = phc_path; //mefi p52 /dev/ptp0
   }
 
   phc_fd = open(path, O_RDONLY);

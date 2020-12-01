@@ -43,6 +43,9 @@
 #include "socket.h"
 #include "util.h"
 
+#include "scion.h" //mefi84 SCION
+
+
 #ifdef FEAT_READLINE
 #include <editline/readline.h>
 #endif
