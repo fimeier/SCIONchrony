@@ -389,8 +389,8 @@ process_message(SCK_Message *message, int sock_fd, int event)
 #endif
 
   if (local_ts.source != NTP_TS_DAEMON)
-    DEBUG_LOG("Updated RX timestamp delay=%.9f tss=%u",
-              UTI_DiffTimespecsToDouble(&sched_ts, &local_ts.ts), local_ts.source);
+    DEBUG_LOG("Updated RX timestamp delay=%.9f tss=%u == %s",
+              UTI_DiffTimespecsToDouble(&sched_ts, &local_ts.ts), local_ts.source, local_ts.source==NTP_TS_KERNEL?"NTP_TS_KERNEL:=1": "NTP_TS_HARDWARE:=2");
 
   /* Just ignore the packet if it's not of a recognized length */
   if (message->length < NTP_HEADER_LENGTH || message->length > sizeof (NTP_Packet)) {
@@ -408,6 +408,9 @@ read_from_socket(int sock_fd, int event, void *anything)
 {
   SCK_Message *messages;
   int i, received, flags = 0;
+  
+  DEBUG_LOG("mefi:: fd=%d and event=%s",sock_fd, event == SCH_FILE_EXCEPTION ? "file exception":"file input");
+
 
 #ifdef HAVE_LINUX_TIMESTAMPING
   if (NIO_Linux_ProcessEvent(sock_fd, event))

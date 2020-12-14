@@ -37,6 +37,8 @@
 #include "local.h"
 #include "logging.h"
 
+#include "scion.h" //mefi84
+
 /* ================================================== */
 
 /* Flag indicating that we are initialised */
@@ -640,6 +642,7 @@ fill_fd_sets(fd_set **read_fds, fd_set **write_fds, fd_set **except_fds)
         rd = *read_fds;
         FD_ZERO(rd);
       }
+      LOG(LOGS_DEBUG, "mefi::add fd=%d for SCH_FILE_INPUT",i); //mefi84
       FD_SET(i, rd); //mefi84 z.B. i=3 => 1000 setzt (i+1)-Bit auf eins.... Falls Descriptoren z.B im Range 0-31 so können diese in einem Int codiert werden
     }
 
@@ -648,6 +651,7 @@ fill_fd_sets(fd_set **read_fds, fd_set **write_fds, fd_set **except_fds)
         wr = *write_fds;
         FD_ZERO(wr);
       }
+      LOG(LOGS_DEBUG, "mefi::add fd=%d for SCH_FILE_OUTPUT",i); //mefi84
       FD_SET(i, wr);
     }
 
@@ -656,6 +660,7 @@ fill_fd_sets(fd_set **read_fds, fd_set **write_fds, fd_set **except_fds)
         ex = *except_fds;
         FD_ZERO(ex);
       }
+      LOG(LOGS_DEBUG, "mefi::add fd=%d for SCH_FILE_EXCEPTION",i); //mefi84
       FD_SET(i, ex);
     }
   }
@@ -765,6 +770,7 @@ SCH_MainLoop(void)
     LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::While-Loop-Start..."); //mefi
     /* Dispatch timeouts and fill now with current raw time */
     dispatch_timeouts(&now);
+    LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::dispatch_timeouts(&now) returned..."); //mefi84
     saved_now = now;
     
     /* The timeout handlers may request quit */
@@ -794,8 +800,15 @@ SCH_MainLoop(void)
     if (!ptv && !p_read_fds && !p_write_fds)
       LOG_FATAL("Nothing to do");
 
-    status = select(one_highest_fd, p_read_fds, p_write_fds, p_except_fds, ptv); //mefi84 status==#ready descriptors, ALL sets are changed, only ready FD's remain
+    if (ptv!=NULL)
+      LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::calling select(). timeout %ld.%lds", ptv->tv_sec, ptv->tv_usec); //mefi84
+    else
+      LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::calling select(). no timeout"); //mefi84
+    
+    //status = select(one_highest_fd, p_read_fds, p_write_fds, p_except_fds, ptv); //mefi84 status==#ready descriptors, ALL sets are changed, only ready FD's remain
+    status = SCION_select(one_highest_fd, p_read_fds, p_write_fds, p_except_fds, ptv); //mefi84 status==#ready descriptors, ALL sets are changed, only ready FD's remain
     errsv = errno;
+    LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::......select() returned"); //mefi84
 
     LCL_ReadRawTime(&now); //mefi84 time represents seconds and nanoseconds since the Epoch (CLOCK_REALTIME)
     LCL_CookTime(&now, &cooked, &err); //mefi84 entspricht CLOCK_REALTIME korrigiert um Frequenzabweichung * Duration - ausstehende Offset <======> die beste Zeit die seit letzter Sync unter ausnutzung der Trainingsdaten (Frequency Offset) und unter beachtung der noch fehlenden Anpassungen (da diese zeitverzögert angewendet werden)
@@ -818,7 +831,9 @@ SCH_MainLoop(void)
       }
     } else if (status > 0) {
       /* A file descriptor is ready for input or output */
+      LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::calling dispatch_filehandlers..."); //mefi84
       dispatch_filehandlers(status, p_read_fds, p_write_fds, p_except_fds);
+      LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::........dispatch_filehandlers returned"); //mefi84
     } else {
       /* No descriptors readable, timeout must have elapsed.
        Therefore, tv must be non-null */

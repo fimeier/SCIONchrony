@@ -418,8 +418,9 @@ connect_ip_address(int sock_fd, IPSockAddr *addr)
   if (saddr_len == 0)
     return 0;
 
+  printf("&saddr=%p &saddr.sa=%p\n", &saddr, &saddr.sa);
   //if (connect(sock_fd, &saddr.sa, saddr_len) < 0 && errno != EINPROGRESS) { //mefi84 EINPROGRESS==Operation now in progress
-  if (SCION_connect(sock_fd, &saddr.sa, saddr_len) < 0 && errno != EINPROGRESS) { //mefi84 SCION
+  if (SCION_connect(sock_fd, &saddr.sa, saddr_len, addr) < 0 && errno != EINPROGRESS) { //mefi84 SCION
     DEBUG_LOG("Could not connect socket to %s : %s",
               UTI_IPSockAddrToString(addr), strerror(errno));
     return 0;
@@ -617,6 +618,8 @@ get_recv_flags(int flags)
   if (flags & SCK_FLAG_MSG_ERRQUEUE) {
 #ifdef MSG_ERRQUEUE
     recv_flags |= MSG_ERRQUEUE;
+    DEBUG_LOG("mefi:: setting recv_flags |= MSG_ERRQUEUE");
+
 #else
     assert(0);
 #endif
