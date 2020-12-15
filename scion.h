@@ -70,6 +70,7 @@ typedef enum
 {
    SCION_OPT_UNDEFINED = 0,
    SCION_IP_PKTINFO,
+   SCION_IP_FREEBIND,
    SCION_SO_SELECT_ERR_QUEUE,
    SCION_SO_TIMESTAMPING,
    SCION_SO_REUSEADDR,
@@ -92,6 +93,7 @@ typedef struct fdInfo
    int type;
    int protocol;
    int connectionType;
+   IPSockAddr boundTo;
    char remoteAddress[MAXADDRESSLENGTH];
    char remoteAddressSCION[MAXADDRESSLENGTH];
    int level_optname_value[SCION_LE_LEN][SCION_OPTNAME_LEN]; //optval !=0 0==disabled
@@ -126,6 +128,12 @@ extern int SCION_setsockopt(int __fd, int __level, int __optname,
 extern int SCION_getsockopt(int __fd, int __level, int __optname,
                             void *__restrict __optval,
                             socklen_t *__restrict __optlen) __THROW;
+
+/* Give the socket FD the local address ADDR (which is LEN bytes long).  
+   On success, zero is returned.  On error, -1 is returned, and errno is
+       set appropriately.*/
+extern int SCION_bind (int __fd, const struct sockaddr *__addr, socklen_t __len)
+     __THROW;   //__CONST_SOCKADDR_ARG
 
 /* Open a connection on socket FD to peer at ADDR (which LEN bytes long).
    For connectionless socket types, just set the default address to send to

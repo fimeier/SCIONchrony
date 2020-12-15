@@ -104,50 +104,67 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     DEBUG_LOG("Setting options fd=%d level=%d optname=%d", __fd, __level, __optname);
 
     int scion_level;
+    int scion_optname;
+
     switch (__level)
     {
+        /************************************************************/
+
     case IPPROTO_IP:
         DEBUG_LOG("\t\t level = IPPROTO_IP");
         scion_level = SCION_IPPROTO_IP;
+        switch (__optname)
+        {
+        case IP_PKTINFO:
+            DEBUG_LOG("\t\t optname = IP_PKTINFO");
+            scion_optname = SCION_IP_PKTINFO;
+            break;
+        case IP_FREEBIND:
+            DEBUG_LOG("\t\t optname = IP_FREEBIND");
+            scion_optname = SCION_IP_FREEBIND;
+            break;
+        default:
+            DEBUG_LOG("\t\t optname = tbd");
+            break;
+        }
         break;
+
+        /************************************************************/
+
     case SOL_SOCKET:
         DEBUG_LOG("\t\t level = SOL_SOCKET");
         scion_level = SCION_SOL_SOCKET;
+        switch (__optname)
+        {
+        case SO_REUSEADDR:
+            DEBUG_LOG("\t\t optname = SO_REUSEADDR");
+            scion_optname = SCION_SO_REUSEADDR;
+            break;
+        case SO_REUSEPORT:
+            DEBUG_LOG("\t\t optname = SO_REUSEPORT");
+            scion_optname = SCION_SO_REUSEPORT;
+            break;
+        case SO_TIMESTAMPING:
+            DEBUG_LOG("\t\t optname = SO_TIMESTAMPING");
+            scion_optname = SCION_SO_TIMESTAMPING;
+            break;
+        case SO_BROADCAST:
+            DEBUG_LOG("\t\t optname = SO_BROADCAST");
+            scion_optname = SCION_SO_BROADCAST;
+            break;
+        case SO_SELECT_ERR_QUEUE:
+            DEBUG_LOG("\t\t optname = SO_SELECT_ERR_QUEUE");
+            scion_optname = SCION_SO_SELECT_ERR_QUEUE;
+            break;
+        default:
+            DEBUG_LOG("\t\t optname = tbd");
+            break;
+        }
         break;
+        /************************************************************/
+
     default:
         DEBUG_LOG("\t\t level = tbd");
-        break;
-    }
-
-    int scion_optname;
-    switch (__optname)
-    {
-    case IP_PKTINFO:
-        DEBUG_LOG("\t\t optname = IP_PKTINFO");
-        scion_optname = SCION_IP_PKTINFO;
-        break;
-    case SO_REUSEADDR:
-        DEBUG_LOG("\t\t optname = SO_REUSEADDR");
-        scion_optname = SCION_SO_REUSEADDR;
-        break;
-    case SO_REUSEPORT:
-        DEBUG_LOG("\t\t optname = SO_REUSEPORT");
-        scion_optname = SCION_SO_REUSEPORT;
-        break;
-    case SO_TIMESTAMPING:
-        DEBUG_LOG("\t\t optname = SO_TIMESTAMPING");
-        scion_optname = SCION_SO_TIMESTAMPING;
-        break;
-    case SO_BROADCAST:
-        DEBUG_LOG("\t\t optname = SO_BROADCAST");
-        scion_optname = SCION_SO_BROADCAST;
-
-        break;
-    case SO_SELECT_ERR_QUEUE:
-        DEBUG_LOG("\t\t optname = SO_SELECT_ERR_QUEUE");
-        scion_optname = SCION_SO_SELECT_ERR_QUEUE;
-        break;
-    default:
         DEBUG_LOG("\t\t optname = tbd");
         break;
     }
@@ -177,6 +194,33 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     }
 
     return result;
+}
+
+/*
+    TODO? How can I define (__CONST_SOCKADDR_ARG __addr) in the header and use it afterwards as I do it?
+
+    ---> no problem in the debugger. Function defined as...
+                SCION_bind(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len)
+        ...then "viewing" the datastructure as "(struct sockaddr*)__addr"
+    ---> Why does the compiler prevents me from compiling similar code?
+*/
+int SCION_bind(int __fd, const struct sockaddr *__addr, socklen_t __len)
+{
+    DEBUG_LOG("Binding fd=%d", __fd);
+
+    if (fdInfos[__fd] != NULL) //should always be true
+    {
+        fdInfo *fdi = fdInfos[__fd];
+        SCK_SockaddrToIPSockAddr(__addr, __len, &fdi->boundTo);
+        DEBUG_LOG("\t\t%s",UTI_IPSockAddrToString(&fdi->boundTo));
+
+    }
+    else
+    {
+        DEBUG_LOG("nonexisting fdInfo: cannot add informations");
+    }
+
+    return bind(__fd, __addr, __len);
 }
 
 int SCION_getsockopt(int __fd, int __level, int __optname, void *__restrict __optval, socklen_t *__restrict __optlen)
@@ -389,7 +433,6 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         DEBUG_LOG("TODO remove recvmmsg()!!!!");
         n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
-
     }
     else
     {

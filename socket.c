@@ -393,9 +393,14 @@ bind_ip_address(int sock_fd, IPSockAddr *addr, int flags)
     return 0;
 
   if (flags & SCK_FLAG_PRIV_BIND && priv_bind_function)
+  {
+    DEBUG_LOG("SCION-NOT-Implemented: priv_bind_function()");
     s = priv_bind_function(sock_fd, &saddr.sa, saddr_len);
-  else
-    s = bind(sock_fd, &saddr.sa, saddr_len);
+  }
+  else {
+    //s = bind(sock_fd, &saddr.sa, saddr_len);
+    s = SCION_bind(sock_fd, &saddr.sa, saddr_len); 
+  }
 
   if (s < 0) {
     DEBUG_LOG("Could not bind socket to %s : %s",
