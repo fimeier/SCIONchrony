@@ -446,10 +446,6 @@ int main
   LOG_Initialise();
 
 
-  printf("Hello I am a debugging entry !!!! really. 99999999999.......\n");
-  SCION_TestCall(42);
-
-
 
   /* Parse long command-line options */
   for (optind = 1; optind < argc; optind++) {
@@ -674,6 +670,9 @@ int main
   } else {
     post_init_rtc_hook(NULL); //mefi85 ruft auch post_init_ntp_hook() auf
   }
+
+  SCION_Initialise(); //mefi84 change this
+
 
   /* The program normally runs under control of the main loop in
      the scheduler. */

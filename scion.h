@@ -4,6 +4,7 @@
 #include "sched.h"
 #include "array.h"
 #include "ntp_sources.h"
+#include "cmdparse.h"
 
 #include "socket.h"
 #include "addressing.h"
@@ -50,6 +51,9 @@
 
 #include "scion_api.h"
 
+
+#define NTP_PORT 123
+
 #define MAXADDRESSLENGTH 100
 
 typedef enum
@@ -83,8 +87,8 @@ typedef enum
 {
    NOT_CONNECTED = 0,
    CONNECTED_TO_NTP_SERVER,
-
-} SCION_CONNECTION_TYPE;
+   IS_NTP_SERVER,
+} SCION_CONNECTION_TYPE; //rename this
 
 typedef struct fdInfo
 {
@@ -92,7 +96,7 @@ typedef struct fdInfo
    int domain;
    int type;
    int protocol;
-   int connectionType;
+   int connectionType; //rename this
    IPSockAddr boundTo;
    char remoteAddress[MAXADDRESSLENGTH];
    char remoteAddressSCION[MAXADDRESSLENGTH];
@@ -102,9 +106,19 @@ typedef struct fdInfo
 } fdInfo;
 
 
+typedef struct addressMapping
+{
+   char addressIP[MAXADDRESSLENGTH];
+   char addressSCION[MAXADDRESSLENGTH];
+} addressMapping; 
 
 
-extern void SCION_TestCall(int a);
+
+void SCION_Initialise();
+
+void SCION_parse_source(char *line, char *type);
+
+
 
 /* Socket Operations */
 

@@ -44,6 +44,10 @@
 #include "cmdparse.h"
 #include "util.h"
 
+
+#include "scion.h" //mefi84 SCION added
+
+
 /* ================================================== */
 
 #define MAX_LINE_LENGTH 2048
@@ -706,6 +710,9 @@ CNF_ParseLine(const char *filename, int number, char *line)
              !strcasecmp(command, "linux_freq_scale") ||
              !strcasecmp(command, "linux_hz")) {
     LOG(LOGS_WARN, "%s directive is no longer supported", command);
+  } else if (!strcasecmp(command, "SCION")) {
+    DEBUG_LOG("Found SCION config....");
+    SCION_parse_source(p, command);    
   } else {
     other_parse_error("Invalid directive");
   }

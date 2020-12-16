@@ -20,13 +20,15 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 
 
 #line 3 "scion_api.go"
+ #include "ntp.h"
  #include <sys/types.h>
  #include <sys/socket.h>
  #include <sys/select.h>
  typedef const struct msghdr *msghdrConstPtr;
  typedef struct timeval *timevalPtr;
  typedef fd_set *fdsetPtr;
- #include "ntp.h"
+ typedef struct mmsghdr *mmsghdrPtr;
+ typedef struct timespec *timespecPtr;
 
 #line 1 "cgo-generated-wrapper"
 
@@ -88,6 +90,8 @@ extern int SCIONselect(int p0, fdsetPtr p1, fdsetPtr p2, fdsetPtr p3, timevalPtr
 extern ssize_t SCIONgosendmsg(int p0, msghdrConstPtr p1, int p2, char* p3);
 
 extern GoInterface SendSomething();
+
+extern int SCIONgorecvmmsg(int p0, mmsghdrPtr p1, unsigned int p2, int p3, timespecPtr p4);
 
 #ifdef __cplusplus
 }

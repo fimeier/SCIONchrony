@@ -8,9 +8,133 @@ static unsigned int highest_fd = 0;
 
 static fdInfo *fdInfos[1024];
 
+//workaround... fix this ugly construct
+#define NUMMAPPINGS 10
+static addressMapping *ntpServers[NUMMAPPINGS];
+static addressMapping *ntpClients[NUMMAPPINGS];
+
+char *getClientSCIONAddress(char *address)
+{ //TODO fix this ugly datastructure... or let it be :-)
+    for (int i = 0; i < NUMMAPPINGS; i++)
+    {
+        addressMapping *client = ntpClients[i];
+        if (client == NULL)
+        {
+            return NULL;
+        }
+
+        if (strcmp(address, client->addressIP) == 0)
+        {
+            return client->addressSCION;
+        }
+    }
+
+    return NULL;
+}
+
+char *getNTPServerSCIONAddress(char *address)
+{ //TODO fix this ugly datastructure
+    for (int i = 0; i < NUMMAPPINGS; i++)
+    {
+        addressMapping *server = ntpServers[i];
+        if (server == NULL)
+        {
+            return NULL;
+        }
+
+        if (strcmp(address, server->addressIP) == 0)
+        {
+            return server->addressSCION;
+        }
+    }
+    return NULL;
+}
+
+void SCION_parse_source(char *line, char *type)
+{
+    DEBUG_LOG("\t------> type = %s", type);
+    DEBUG_LOG("\t------> line = %s", line);
+
+    /* Parse options */
+    int n = 0;
+    int ok;
+    char *cmd;
+
+    for (; *line; line += n)
+    {
+        cmd = line;
+        line = CPS_SplitWord(line);
+        //DEBUG_LOG("\t------> line3 = %s", line);
+        //DEBUG_LOG("\t------> cmd = %s", cmd);
+
+        if (!strcasecmp(cmd, "server"))
+        {
+            DEBUG_LOG("\t------> This is an IP <-> SCION mapping");
+            char d[] = " ";
+
+            //IP address
+            char *addressIP = strtok(line, d);
+            DEBUG_LOG("\t------> addressIP = %s", addressIP);
+
+            //SCION address
+            char *addressSCION = strtok(NULL, d);
+            DEBUG_LOG("\t------> addressSCION = %s", addressSCION);
+
+            ok = 0;
+            for (int i = 0; i < NUMMAPPINGS; i++)
+            {
+                addressMapping *server = ntpServers[i];
+                if (server == NULL)
+                {
+                    addressMapping *server = calloc(1, sizeof(addressMapping));
+                    strcpy(server->addressIP, addressIP);
+                    strcpy(server->addressSCION, addressSCION);
+                    ntpServers[i] = server;
+                    DEBUG_LOG("\t------> Mapping added to Configuration");
+                    ok = 1;
+                    break;
+                }
+            }
+            if (ok != 1)
+            {
+                DEBUG_LOG("\t------> There was a problem adding the Mapping to the Configuration");
+            }
+            n = 0;
+        }
+    }
+}
+
 void SCION_Initialise()
 {
     memset(socked_mapping, 0, 1024 * sizeof(int)); //needed?
+
+    //workaround... fix this ugly construct
+    /* //now as configuration: SCION server 10.80.45.128:123 1-ff00:0:110,10.80.45.83:11111
+    addressMapping *server = calloc(1, sizeof(addressMapping));
+    strcpy(server->addressIP, "10.80.45.128:123");
+    strcpy(server->addressSCION, "1-ff00:0:110,10.80.45.83:11111");
+    ntpServers[0] = server;
+
+    server = calloc(1, sizeof(addressMapping));
+    strcpy(server->addressIP, "85.195.227.162:123");
+    strcpy(server->addressSCION, "1-ff00:0:110,10.80.45.83:22222");
+    ntpServers[1] = server;
+    */
+
+    /*
+    Echte Clients werden dann über GO empfangen und daher auch von dort registriert
+    =>Fraglich inwiefern/welche Infos hier verfügbar sein sollen
+   */
+
+    addressMapping *client = calloc(1, sizeof(addressMapping));
+    strcpy(client->addressIP, "10.80.45.78");
+    strcpy(client->addressSCION, "1-ff00:0:110,10.80.45.83:33333");
+    ntpClients[0] = client;
+
+    client = calloc(1, sizeof(addressMapping));
+    strcpy(client->addressIP, "10.80.45.1");
+    strcpy(client->addressSCION, "1-ff00:0:110,10.80.45.83:44444");
+    ntpClients[2] = client;
 }
 
 void SCION_TestCall(int a)
@@ -234,7 +358,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
             { //access ts_flags in ntp_io_linux
                 DEBUG_LOG("\t\t\t\t|-----> This is the option to activate RX-Timestamps (HW/Kernel)");
             }
-            if (*((int *)__optval) == (ts_flags_p52|ts_tx_flags_p52))
+            if (*((int *)__optval) == (ts_flags_p52 | ts_tx_flags_p52))
             { //access ts_flags in ntp_io_linux
                 DEBUG_LOG("\t\t\t\t|-----> This is the option to activate TX/RX-Timestamps (HW/Kernel)");
             }
@@ -279,7 +403,11 @@ int SCION_bind(int __fd, const struct sockaddr *__addr, socklen_t __len)
     {
         fdInfo *fdi = fdInfos[__fd];
         SCK_SockaddrToIPSockAddr(__addr, __len, &fdi->boundTo);
-        DEBUG_LOG("\t\t%s", UTI_IPSockAddrToString(&fdi->boundTo));
+        DEBUG_LOG("\t|---->%s", UTI_IPSockAddrToString(&fdi->boundTo));
+
+        if(fdi->boundTo.port == NTP_PORT){
+            fdi->connectionType = IS_NTP_SERVER;
+        }
     }
     else
     {
@@ -303,9 +431,11 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
     char *remoteAddress = UTI_IPSockAddrToString(addr);
 
     //TODO 1 Solve this for all cases
-    char *ntpServer1 = "10.80.45.128:123";
-    char *ntpServer1AsScionAddress = "1-ff00:0:110,10.80.45.83:11111";
-    if (strcmp(remoteAddress, ntpServer1) == 0)
+    //char *ntpServer1 = "10.80.45.128:123";
+    //char *ntpServer1AsScionAddress = "1-ff00:0:110,10.80.45.83:11111";
+
+    char *ntpServerAsScionAddress = getNTPServerSCIONAddress(remoteAddress);
+    if (ntpServerAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
     {
         DEBUG_LOG("Connecting socket fd=%d to %s is an ntp server", __fd, remoteAddress);
         if (fdInfos[__fd] != NULL) //should always be true
@@ -313,7 +443,7 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
             fdInfo *fdi = fdInfos[__fd];
             fdi->connectionType = CONNECTED_TO_NTP_SERVER;
             strcpy(fdi->remoteAddress, remoteAddress);
-            strcpy(fdi->remoteAddressSCION, ntpServer1AsScionAddress);
+            strcpy(fdi->remoteAddressSCION, ntpServerAsScionAddress);
         }
     }
 
@@ -328,20 +458,63 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
     int status;
     if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
     {
+        DEBUG_LOG("\t|----> using SCION");
         //This implies we are using SCION
         DEBUG_LOG("\t|----> connected to %s i.e. %s\n", fdInfos[__fd]->remoteAddress, fdInfos[__fd]->remoteAddressSCION);
         status = SCIONgosendmsg(__fd, __message, __flags, fdInfos[__fd]->remoteAddressSCION);
-        DEBUG_LOG("Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
+        DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
         //TODO remove sendmsg()
-        DEBUG_LOG("TODO remove sendmsg()!!!!");
+        DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
         status = sendmsg(__fd, __message, __flags);
+
+        return status;
     }
-    else
+
+    if (__message->msg_namelen != 0)
     {
-        DEBUG_LOG("\t|----> not a connection to an ntp server. Not using SCION!");
-        status = sendmsg(__fd, __message, __flags);
+        switch (((struct sockaddr *)__message->msg_name)->sa_family)
+        {
+        case AF_INET:
+        {
+
+            //TODO fix this ugly construct
+            char remoteAddress[MAXADDRESSLENGTH] = ""; //initialozation is needed!!!
+            strcat(remoteAddress, inet_ntoa(((struct sockaddr_in *)__message->msg_name)->sin_addr));
+            /* TODO: Add port
+            strcat(remoteAddress, ":");
+            char portAsStr[10];
+            sprintf(portAsStr, "%u", ntohs(((struct sockaddr_in *)__message->msg_name)->sin_port));
+            strcat(remoteAddress, portAsStr);
+            */
+            DEBUG_LOG("\t|----> sending to %s", remoteAddress);
+
+            char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
+            if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
+            {
+                DEBUG_LOG("\t|----> using SCION address %s", clientAsScionAddress);
+                status = SCIONgosendmsg(__fd, __message, __flags, clientAsScionAddress);
+                DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
+
+                //TODO remove sendmsg()
+                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+                status = sendmsg(__fd, __message, __flags);
+
+                return status;
+            }
+            break;
+        }
+        case AF_UNIX:
+            DEBUG_LOG("\t|----> sending to = %s", ((struct sockaddr_un *)__message->msg_name)->sun_path);
+            break;
+        default:
+            DEBUG_LOG("\t|----> sending to (NOT IMPLEMENTED!!!) = tbd");
+            break;
+        }
     }
+    DEBUG_LOG("\t|----> not a connection to a scion target. Not using SCION!");
+    status = sendmsg(__fd, __message, __flags);
+    DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
     return status;
 }
@@ -475,6 +648,8 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n)
 int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, int __flags, struct timespec *__tmo)
 {
 
+    printMMSGHDR(__vmessages, __vlen);
+
     //assuming this are the only possible flags
     int receiveFlag = (__flags & MSG_ERRQUEUE) ? SCION_MSG_ERRQUEUE : SCION_FILE_INPUT;
 
@@ -492,8 +667,19 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         ZB entscheide ob als nächstes GO Augerufen wird... ob zB. receiveFlag oder __flags weitergegeben werden soll
         */
 
-        n = 0; //add call to SCIOn receive...
+        n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over SCION connection", n);
+
+        //TODO remove recvmmsg()
+        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+        DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
+    }
+    else if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
+    {
+        n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+        DEBUG_LOG("|----->received %d messages over SCION connection (as NTP Server)", n);
+        DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
 
         //TODO remove recvmmsg()
         DEBUG_LOG("TODO remove recvmmsg()!!!!");

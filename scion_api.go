@@ -1,12 +1,14 @@
 package main
 
+// #include "ntp.h"
 // #include <sys/types.h>
 // #include <sys/socket.h>
 // #include <sys/select.h>
 // typedef const struct msghdr *msghdrConstPtr;
 // typedef struct timeval *timevalPtr;
 // typedef fd_set *fdsetPtr;
-// #include "ntp.h"
+// typedef struct mmsghdr *mmsghdrPtr;
+// typedef struct timespec *timespecPtr;
 import "C"
 import (
 	"context"
@@ -465,6 +467,12 @@ func PingSomething() error {
 	fmt.Println("%v", stats)
 
 	return nil
+}
+
+//export SCIONgorecvmmsg
+func SCIONgorecvmmsg(fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int, tmo C.timespecPtr) C.int {
+
+	return C.int(42)
 
 }
 
