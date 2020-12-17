@@ -374,7 +374,7 @@ process_message(SCK_Message *message, int sock_fd, int event)
     return;
   }
 
-  local_addr.ip_addr = message->local_addr.ip;
+  local_addr.ip_addr = message->local_addr.ip; //mefi84 für TX->2xTS Messages ist die Remote Address: IP_PKTINFO ipi_addr Feld 
   local_addr.if_index = message->if_index;;
   local_addr.sock_fd = sock_fd;
 

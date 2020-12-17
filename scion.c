@@ -395,7 +395,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         ...then "viewing" the datastructure as "(struct sockaddr*)__addr"
     ---> Why does the compiler prevents me from compiling similar code?
 */
-int SCION_bind(int __fd, const struct sockaddr *__addr, socklen_t __len)
+int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
 {
     DEBUG_LOG("Binding fd=%d", __fd);
 
@@ -405,7 +405,8 @@ int SCION_bind(int __fd, const struct sockaddr *__addr, socklen_t __len)
         SCK_SockaddrToIPSockAddr(__addr, __len, &fdi->boundTo);
         DEBUG_LOG("\t|---->%s", UTI_IPSockAddrToString(&fdi->boundTo));
 
-        if(fdi->boundTo.port == NTP_PORT){
+        if (fdi->boundTo.port == NTP_PORT)
+        {
             fdi->connectionType = IS_NTP_SERVER;
         }
     }
@@ -454,6 +455,14 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
 ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
 {
     DEBUG_LOG("Sending message on socket fd=%d", __fd);
+
+    if (DEBUG)
+    {
+        struct mmsghdr msgvec;
+        msgvec.msg_hdr = *__message;
+        msgvec.msg_len = 0;
+        printMMSGHDR(&msgvec, 1, SCION_IP_TX_NTP_MSG);
+    }
 
     int status;
     if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
@@ -531,14 +540,19 @@ typedef union sockaddr_all
     struct sockaddr sa;
 } sockaddr_all;
 
-void printMMSGHDR(struct mmsghdr *msgvec, int n)
+void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 {
+    int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) || (SCION_TYPE == SCION_IP_RX_NTP_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
+    int sendNTP = SCION_TYPE == SCION_IP_TX_NTP_MSG ? 1 : 0;
+    DEBUG_LOG("Called with SCION_TYPE=%d => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
+
     for (int i = 0; i < n; i++)
     {
         struct msghdr *msg_hdr = &msgvec[i].msg_hdr;
 
-        DEBUG_LOG("\t|-----> Printing message %d:", i + 1);
-        DEBUG_LOG("\t\t\tmsg_len=%u", msgvec[i].msg_len);
+        DEBUG_LOG("\t|-----> Printing message %d: %s", i + 1, (msg_hdr->msg_flags == MSG_ERRQUEUE) ? "This is (probably) a local error i.e. arrival of TS's" : "");
+        if (!sendNTP)
+            DEBUG_LOG("\t\t\tmsg_len=%u", msgvec[i].msg_len);
         DEBUG_LOG("\t\t\tmsg_hdr @ %p", msg_hdr);
 
         if (msg_hdr->msg_namelen == 0)
@@ -573,7 +587,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n)
         {
             DEBUG_LOG("\t\t\t\t|-----> Printing vector=%d:", io);
             DEBUG_LOG("\t\t\t\t\t*iov_base=%p", msg_hdr->msg_iov[io].iov_base);
-            DEBUG_LOG("\t\t\t\t\tiov_len=%lu", msg_hdr->msg_iov[io].iov_len);
+            DEBUG_LOG("\t\t\t\t\tiov_len=%lu %s", msg_hdr->msg_iov[io].iov_len, dataEncapLayer2 ? "(HINWEIS: Ich vermute dies gibt primär die Grösse des Buffers an und hat nichts mit der grösse einer EMPFANGENEN Message zu tun. Insbesondere wird dieser Wert durch den caller nicht abgepasst)" : "");
         }
 
         /*       
@@ -603,7 +617,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n)
         struct cmsghdr *cmsg;
         for (cmsg = CMSG_FIRSTHDR(msg_hdr); cmsg; cmsg = CMSG_NXTHDR(msg_hdr, cmsg))
         {
-            DEBUG_LOG("\t\t\t\tProcessing *cmsghdr@%p....", cmsg);
+            DEBUG_LOG("\t\t\t\tProcessing *cmsghdr@%p\tcmsg->cmsg_level=%d\tcmsg->cmsg_type=%d", cmsg, cmsg->cmsg_level, cmsg->cmsg_type);
 #ifdef HAVE_IN_PKTINFO
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO)
             {
@@ -637,21 +651,117 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n)
                     DEBUG_LOG("\t\t\t\t\tHW-TS tv_sec=%ld tv_nsec=%ld", hw.tv_sec, hw.tv_nsec);
                 }
             }
+
+            if (cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR)
+            {
+                DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type IP_RECVERR", cmsg);
+                struct sock_extended_err *sock_err;
+                sock_err = (struct sock_extended_err *)CMSG_DATA(cmsg);
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_errno=%u %s", sock_err->ee_errno, sock_err->ee_errno == ENOMSG ? "(ENOMSG)" : "");
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_origin=%d %s", sock_err->ee_origin, sock_err->ee_origin == SO_EE_ORIGIN_TIMESTAMPING ? "(SO_EE_ORIGIN_TIMESTAMPING)" : "");
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_type=%d", sock_err->ee_type);
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_code=%d", sock_err->ee_code);
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_pad=%d", sock_err->ee_pad);
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_info=%d %s", sock_err->ee_data, sock_err->ee_info == SCM_TSTAMP_SND ? "(SCM_TSTAMP_SND)" : "");
+                DEBUG_LOG("\t\t\t\t|-----> sock_err->ee_data=%d", sock_err->ee_data);
+                if (sock_err->ee_errno == ENOMSG && sock_err->ee_info == SCM_TSTAMP_SND && sock_err->ee_origin == SO_EE_ORIGIN_TIMESTAMPING)
+                {
+                    DEBUG_LOG("\t\t\t\t|-----> everything as excpected. Can be ignored");
+                }
+            }
         }
 
         DEBUG_LOG("\t\t\t\tmsg_hdr->msg_flags=%d", msg_hdr->msg_flags);
 
-        //!process_header(&hdr->msg_hdr, hdr->msg_len, sock_fd, flags, &messages[n_ok])
+        /*
+    l2_length = message->length;
+    message->length = extract_udp_data(message->data, &message->remote_addr.ip, message->length);
+    //mefi84 *msg==*iov_base  *remote_addr==(to fill in the address)  len==(msg_len in mmsghdr struct)
+
+    */
+
+        for (int io = 0; io < msg_hdr->msg_iovlen; io++) //probably always 1 vector
+        {
+            if (sendNTP)
+            {
+                DEBUG_LOG("\t\t\textracting ntp data from iov_base=%p:", msg_hdr->msg_iov[io].iov_base);
+                printNTPPacket(msg_hdr->msg_iov[io].iov_base, msg_hdr->msg_iov[io].iov_len);
+            }
+            else
+            {
+                DEBUG_LOG("\t\t\textracting ntp data from iov_base=%p:", msg_hdr->msg_iov[io].iov_base);
+                void *baseSource = msg_hdr->msg_iov[io].iov_base;
+                int len = msgvec[i].msg_len; //length of the received msg (has nothing to do with iov_base buffer length)
+                void *debugBuffer = calloc(1, MAXMESSAGESIZE);
+                NTP_Remote_Address *remote_addr = calloc(1, sizeof(NTP_Remote_Address));
+                memcpy(debugBuffer, baseSource, len); //create copy, do not change data
+                                                      //
+                //mefi84 *msg==*iov_base  *remote_addr==(to fill in the address)  len==(msg_len in mmsghdr struct)
+
+                len = SCION_extract_udp_data(debugBuffer, remote_addr, len);
+                printNTPPacket(debugBuffer, len);
+
+                free(debugBuffer); //correct?
+                free(remote_addr);
+            }
+        }
     }
+}
+
+void printNTPPacket(void *ntpPacket, int len)
+{
+    //
+
+    NTP_Packet *ntp = ntpPacket;
+
+    DEBUG_LOG("\t\t\t|-----> printing NTP Packet: TODO: Add size check!!!");
+    if (len<48){
+        return;
+    }
+
+    DEBUG_LOG("\t\t\t|-----> lvm=%u", ntp->lvm);
+    DEBUG_LOG("\t\t\t|-----> stratum=%u", ntp->stratum);
+    DEBUG_LOG("\t\t\t|-----> poll=%d", ntp->poll);
+    DEBUG_LOG("\t\t\t|-----> precision=%d", ntp->precision);
+
+    DEBUG_LOG("\t\t\t|-----> root_delay=%u", ntp->root_delay);
+    DEBUG_LOG("\t\t\t|-----> root_dispersion=%u", ntp->root_dispersion);
+    DEBUG_LOG("\t\t\t|-----> reference_id=%u", ntp->reference_id);
+
+    DEBUG_LOG("\t\t\t|-----> reference_ts=%u.%u", ntp->reference_ts.hi, ntp->reference_ts.lo);
+    DEBUG_LOG("\t\t\t|-----> originate_ts=%u.%u", ntp->originate_ts.hi, ntp->originate_ts.lo);
+    DEBUG_LOG("\t\t\t|-----> receive_ts=%u.%u", ntp->receive_ts.hi, ntp->receive_ts.lo);
+    DEBUG_LOG("\t\t\t|-----> transmit_ts=%u.%u", ntp->transmit_ts.hi, ntp->transmit_ts.lo);
+
+    DEBUG_LOG("\t\t\t|-----> extensions=tbd");
+
+    /*
+    uint8_t lvm; //mefi84 LeapIndicator(2)||VersionNumber(3)||Mode(3) == 8 Bits
+    uint8_t stratum;
+    int8_t poll;
+    int8_t precision;
+
+    NTP_int32 root_delay;
+    NTP_int32 root_dispersion;
+    NTP_int32 reference_id;
+
+    NTP_int64 reference_ts;
+    NTP_int64 originate_ts;
+    NTP_int64 receive_ts;
+    NTP_int64 transmit_ts;
+
+    uint8_t extensions[NTP_MAX_EXTENSIONS_LENGTH];
+    */
 }
 
 int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, int __flags, struct timespec *__tmo)
 {
 
-    printMMSGHDR(__vmessages, __vlen);
-
     //assuming this are the only possible flags
     int receiveFlag = (__flags & MSG_ERRQUEUE) ? SCION_MSG_ERRQUEUE : SCION_FILE_INPUT;
+    int scion_type = (__flags & MSG_ERRQUEUE) ? SCION_IP_TX_ERR_MSG : SCION_IP_RX_NTP_MSG;
+
+    //printMMSGHDR(__vmessages, __vlen, scion_type);
 
     char *flagsMeaning;
     flagsMeaning = (receiveFlag == SCION_MSG_ERRQUEUE) ? "MSG_ERRQUEUE" : "file input";
@@ -692,7 +802,7 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
     }
 
-    printMMSGHDR(__vmessages, n);
+    printMMSGHDR(__vmessages, n, scion_type);
 
     return n;
 }
@@ -732,4 +842,103 @@ int SCION_select(int __nfds, fd_set *__restrict __readfds,
     }
 
     return n;
+}
+
+//linekr problem... use directly chronys definition on ntp_io_linux.c
+
+/* ================================================== */
+/* Extract UDP data from a layer 2 message.  Supported is Ethernet
+   with optional VLAN tags. */
+//mefi84 *msg==*iov_base  *remote_addr==(to fill in the address)  len==(msg_len in mmsghdr struct)
+int SCION_extract_udp_data(unsigned char *msg, NTP_Remote_Address *remote_addr, int len)
+{
+    unsigned char *msg_start = msg;
+
+    remote_addr->ip_addr.family = IPADDR_UNSPEC;
+    remote_addr->port = 0;
+
+    /* Skip MACs */
+    if (len < 12)
+        return 0;
+    len -= 12, msg += 12;
+
+    /* Skip VLAN tag(s) if present */
+    while (len >= 4 && msg[0] == 0x81 && msg[1] == 0x00)
+        len -= 4, msg += 4;
+
+    /* Skip IPv4 or IPv6 ethertype */
+    if (len < 2 || !((msg[0] == 0x08 && msg[1] == 0x00) ||
+                     (msg[0] == 0x86 && msg[1] == 0xdd)))
+        return 0;
+    len -= 2, msg += 2;
+
+    /* Parse destination address and port from IPv4/IPv6 and UDP headers */
+    if (len >= 20 && msg[0] >> 4 == 4)
+    {
+        int ihl = (msg[0] & 0xf) * 4;
+        uint32_t addr;
+
+        if (len < ihl + 8 || msg[9] != 17)
+            return 0;
+
+        memcpy(&addr, msg + 16, sizeof(addr));
+        remote_addr->ip_addr.addr.in4 = ntohl(addr);
+        remote_addr->port = ntohs(*(uint16_t *)(msg + ihl + 2));
+        remote_addr->ip_addr.family = IPADDR_INET4;
+        len -= ihl + 8, msg += ihl + 8;
+#ifdef FEAT_IPV6
+    }
+    else if (len >= 48 && msg[0] >> 4 == 6)
+    {
+        int eh_len, next_header = msg[6];
+
+        memcpy(&remote_addr->ip_addr.addr.in6, msg + 24, sizeof(remote_addr->ip_addr.addr.in6));
+        len -= 40, msg += 40;
+
+        /* Skip IPv6 extension headers if present */
+        while (next_header != 17)
+        {
+            switch (next_header)
+            {
+            case 44: /* Fragment Header */
+                /* Process only the first fragment */
+                if (ntohs(*(uint16_t *)(msg + 2)) >> 3 != 0)
+                    return 0;
+                eh_len = 8;
+                break;
+            case 0:   /* Hop-by-Hop Options */
+            case 43:  /* Routing Header */
+            case 60:  /* Destination Options */
+            case 135: /* Mobility Header */
+                eh_len = 8 * (msg[1] + 1);
+                break;
+            case 51: /* Authentication Header */
+                eh_len = 4 * (msg[1] + 2);
+                break;
+            default:
+                return 0;
+            }
+
+            if (eh_len < 8 || len < eh_len + 8)
+                return 0;
+
+            next_header = msg[0];
+            len -= eh_len, msg += eh_len;
+        }
+
+        remote_addr->port = ntohs(*(uint16_t *)(msg + 2));
+        remote_addr->ip_addr.family = IPADDR_INET6;
+        len -= 8, msg += 8;
+#endif
+    }
+    else
+    {
+        return 0;
+    }
+
+    /* Move the message to fix alignment of its fields */
+    if (len > 0)
+        memmove(msg_start, msg, len);
+
+    return len;
 }

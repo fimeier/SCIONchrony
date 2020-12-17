@@ -9,6 +9,7 @@
 #include "socket.h"
 #include "addressing.h"
 
+
 #ifdef HAVE_LINUX_TIMESTAMPING
 #include <linux/errqueue.h>
 #include <linux/net_tstamp.h>
@@ -55,6 +56,16 @@
 #define NTP_PORT 123
 
 #define MAXADDRESSLENGTH 100
+#define MAXMESSAGESIZE 1200
+
+/* Used for debuggin
+   _IP_ <=> packets/structures in c-World
+*/
+typedef enum{
+   SCION_IP_TX_ERR_MSG,
+   SCION_IP_TX_NTP_MSG,
+   SCION_IP_RX_NTP_MSG,
+} SCION_TYPE;
 
 typedef enum
 {
@@ -146,7 +157,7 @@ extern int SCION_getsockopt(int __fd, int __level, int __optname,
 /* Give the socket FD the local address ADDR (which is LEN bytes long).  
    On success, zero is returned.  On error, -1 is returned, and errno is
        set appropriately.*/
-extern int SCION_bind (int __fd, const struct sockaddr *__addr, socklen_t __len)
+extern int SCION_bind (int __fd, struct sockaddr *__addr, socklen_t __len)
      __THROW;   //__CONST_SOCKADDR_ARG
 
 /* Open a connection on socket FD to peer at ADDR (which LEN bytes long).
@@ -190,3 +201,16 @@ extern int SCION_select(int __nfds, fd_set *__restrict __readfds,
                         fd_set *__restrict __writefds,
                         fd_set *__restrict __exceptfds,
                         struct timeval *__restrict __timeout);
+
+
+
+
+/* some helpers */
+
+int SCION_extract_udp_data(unsigned char *msg, NTP_Remote_Address *remote_addr, int len);
+
+void printNTPPacket(void * ntpPacket, int len);
+
+
+void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
+

@@ -611,10 +611,11 @@ process_hw_timestamp(struct Interface *iface, struct timespec *hw_ts,
   local_ts->source = NTP_TS_HARDWARE;
 }
 
+
 /* ================================================== */
 /* Extract UDP data from a layer 2 message.  Supported is Ethernet
    with optional VLAN tags. */
-
+//mefi84 *msg==*iov_base  *remote_addr==(to fill in the address)  len==(msg_len in mmsghdr struct)
 static int
 extract_udp_data(unsigned char *msg, NTP_Remote_Address *remote_addr, int len)
 {
@@ -753,7 +754,7 @@ NIO_Linux_ProcessMessage(SCK_Message *message, NTP_Local_Address *local_addr,
     return 0;
   //mefi84 Vermutlich wird hier das gesendete Paket ebenfalls extrahiert zusammen mit einem TS (falls man etwas gesendet hat, d.h. vermutlich nur im TX fall oder bei RX+Error?... analysiere woher RX TS kommen)
   /* The data from the error queue includes all layers up to UDP.  We have to
-     extract the UDP data and also the destination address with port as there
+     extract the UDP data and also the destination address with port as there    <----- was ist mit local_address, die entspricht ja ipi.ipi_spec_dst.s_addr=xxx.xxx.xxx.xxx (Local address.. wrong->? Routing destin
      currently doesn't seem to be a better way to get them both. */
   l2_length = message->length;
   message->length = extract_udp_data(message->data, &message->remote_addr.ip, message->length);

@@ -51,7 +51,7 @@ ALL_OBJS = $(OBJS) $(CLI_OBJS)
 LIBS =  -lm 
 EXTRA_LIBS = 
 EXTRA_CLI_LIBS = 
-EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion_api.so #SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
+EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion_api.so#SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
 
 # Until we have a main procedure we can link, just build object files
 # to test compilation

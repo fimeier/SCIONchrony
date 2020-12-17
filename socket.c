@@ -884,7 +884,7 @@ process_header(struct msghdr *msg, int msg_length, int sock_fd, int flags,
 
       memcpy(&ts3, CMSG_DATA(cmsg), sizeof (ts3));
       message->timestamp.kernel = ts3.ts[0];
-      message->timestamp.hw = ts3.ts[2];
+      message->timestamp.hw = ts3.ts[2]; //warum beide setzen??? es kann jeweils nur ein Type empfangen werden, anderer ist in nächster Nachricht (PS es werden zwei messages erstellt und d.h. überschreiben sie sich auch nicht gegenseitig)
     }
 
     if ((cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR) ||
