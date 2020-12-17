@@ -434,11 +434,12 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
     //TODO 1 Solve this for all cases
     //char *ntpServer1 = "10.80.45.128:123";
     //char *ntpServer1AsScionAddress = "1-ff00:0:110,10.80.45.83:11111";
+    DEBUG_LOG("Connecting socket fd=%d to %s", __fd, remoteAddress);
 
     char *ntpServerAsScionAddress = getNTPServerSCIONAddress(remoteAddress);
     if (ntpServerAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
     {
-        DEBUG_LOG("Connecting socket fd=%d to %s is an ntp server", __fd, remoteAddress);
+        DEBUG_LOG("\t|----->  is an ntp server");
         if (fdInfos[__fd] != NULL) //should always be true
         {
             fdInfo *fdi = fdInfos[__fd];
@@ -448,7 +449,7 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
         }
     }
 
-    DEBUG_LOG("Connecting socket fd=%d to %s", __fd, remoteAddress);
+    
     return connect(__fd, __addr, __len);
 }
 
@@ -542,8 +543,10 @@ typedef union sockaddr_all
 
 void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 {
-    int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) || (SCION_TYPE == SCION_IP_RX_NTP_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
+   // int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) || (SCION_TYPE == SCION_IP_RX_NTP_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
+    int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
     int sendNTP = SCION_TYPE == SCION_IP_TX_NTP_MSG ? 1 : 0;
+    int receiveNTP = SCION_TYPE == SCION_IP_RX_NTP_MSG ? 1 : 0;
     DEBUG_LOG("Called with SCION_TYPE=%d => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
 
     for (int i = 0; i < n; i++)
@@ -682,7 +685,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 
         for (int io = 0; io < msg_hdr->msg_iovlen; io++) //probably always 1 vector
         {
-            if (sendNTP)
+            if (sendNTP || receiveNTP)
             {
                 DEBUG_LOG("\t\t\textracting ntp data from iov_base=%p:", msg_hdr->msg_iov[io].iov_base);
                 printNTPPacket(msg_hdr->msg_iov[io].iov_base, msg_hdr->msg_iov[io].iov_len);
@@ -714,12 +717,22 @@ void printNTPPacket(void *ntpPacket, int len)
 
     NTP_Packet *ntp = ntpPacket;
 
-    DEBUG_LOG("\t\t\t|-----> printing NTP Packet: TODO: Add size check!!!");
-    if (len<48){
+    if (len < NTP_HEADER_LENGTH || len % 4U != 0)
+    {
+        DEBUG_LOG("NTP packet has invalid length %d", len);
         return;
     }
 
-    DEBUG_LOG("\t\t\t|-----> lvm=%u", ntp->lvm);
+    /*
+ //Macros to work with the lvm field
+#define NTP_LVM_TO_LEAP(lvm) (((lvm) >> 6) & 0x3)
+#define NTP_LVM_TO_VERSION(lvm) (((lvm) >> 3) & 0x7)
+#define NTP_LVM_TO_MODE(lvm) ((lvm) & 0x7)
+#define NTP_LVM(leap, version, mode) \
+  ((((leap) << 6) & 0xc0) | (((version) << 3) & 0x38) | ((mode) & 0x07))
+*/
+
+    DEBUG_LOG("\t\t\t|-----> lvm=%u", ntp->lvm); //siehe macros chrony: NTP_LVM_TO_VERSION(packet->lvm) NTP_LVM_TO_MODE(packet->lvm);
     DEBUG_LOG("\t\t\t|-----> stratum=%u", ntp->stratum);
     DEBUG_LOG("\t\t\t|-----> poll=%d", ntp->poll);
     DEBUG_LOG("\t\t\t|-----> precision=%d", ntp->precision);
@@ -788,7 +801,7 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
     else if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
     {
         n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
-        DEBUG_LOG("|----->received %d messages over SCION connection (as NTP Server)", n);
+        DEBUG_LOG("|----->received %d messages over SCION connection (we are the NTP Server)", n);
         DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
 
         //TODO remove recvmmsg()
