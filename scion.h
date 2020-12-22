@@ -50,8 +50,11 @@
 #include <arpa/inet.h>
 #include <sys/random.h>
 
-#include "scion_api.h"
 
+#ifndef _SCION_API_H
+#define _SCION_API_H
+#include "scion_api.h"
+#endif
 
 #define NTP_PORT 123
 
@@ -103,7 +106,7 @@ typedef enum
 
 typedef struct fdInfo
 {
-   int fd;
+   int fd; 
    int domain;
    int type;
    int protocol;
@@ -112,8 +115,9 @@ typedef struct fdInfo
    char remoteAddress[MAXADDRESSLENGTH];
    char remoteAddressSCION[MAXADDRESSLENGTH];
    int level_optname_value[SCION_LE_LEN][SCION_OPTNAME_LEN]; //optval !=0 0==disabled
+   int createTxTimestamp;  // shortcut...
+   int createRxTimestamp;  //   ... compare SCION_setsockopt()
    //int optval[SCION_OPTNAME_LEN];
-
 } fdInfo;
 
 
@@ -122,7 +126,6 @@ typedef struct addressMapping
    char addressIP[MAXADDRESSLENGTH];
    char addressSCION[MAXADDRESSLENGTH];
 } addressMapping; 
-
 
 
 void SCION_Initialise();
@@ -180,7 +183,8 @@ extern int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len,
 extern ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message,
                              int __flags);
 
-/* Receive up to VLEN messages as described by VMESSAGES from socket FD.
+
+/* Receive up to VLEN messages as described by VMESSAGES from socket FD. 
    Returns the number of messages received or -1 for errors.
 
    This function is a cancellation point and therefore not marked with

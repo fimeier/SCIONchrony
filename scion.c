@@ -1,7 +1,6 @@
 #include "scion.h"
-//#include "scion_api.h"
 
-static int socked_mapping[1024];
+//static int socked_mapping[1024];
 
 //TODO CHange is if still needed
 static unsigned int highest_fd = 0;
@@ -67,7 +66,7 @@ void SCION_parse_source(char *line, char *type)
         //DEBUG_LOG("\t------> line3 = %s", line);
         //DEBUG_LOG("\t------> cmd = %s", cmd);
 
-        if (!strcasecmp(cmd, "server"))
+        if (!strcasecmp(cmd, "server")) //example: server 85.195.227.162:123 1-ff00:0:110,10.80.45.83:11111
         {
             DEBUG_LOG("\t------> This is an IP <-> SCION mapping");
             char d[] = " ";
@@ -101,12 +100,44 @@ void SCION_parse_source(char *line, char *type)
             }
             n = 0;
         }
+        else if (!strcasecmp(cmd, "sciondAddr")) //example: sciondAddr 127.0.0.1:30255
+        {
+            DEBUG_LOG("\t------> This is the ScionD Address");
+            char d[] = " ";
+
+            //IP sciondAddr
+            char *addressIP = strtok(line, d);
+            DEBUG_LOG("\t------> sciondAddr = %s", addressIP);
+
+            ok = SetSciondAddr(addressIP);
+            if (ok != 1)
+            {
+                DEBUG_LOG("\t------> There was a problem adding the Mapping to the Configuration");
+            }
+            n = 0;
+        }
+        else if (!strcasecmp(cmd, "localAddr")) //example: localAddr 1-ff00:0:112,10.80.45.83
+        {
+            DEBUG_LOG("\t------> This is the local SCION Address");
+            char d[] = " ";
+
+            //IP sciondAddr
+            char *addressIP = strtok(line, d);
+            DEBUG_LOG("\t------> localAddr = %s", addressIP);
+
+            ok = SetLocalAddr(addressIP);
+            if (ok != 1)
+            {
+                DEBUG_LOG("\t------> There was a problem adding the Mapping to the Configuration");
+            }
+            n = 0;
+        }
     }
 }
 
 void SCION_Initialise()
 {
-    memset(socked_mapping, 0, 1024 * sizeof(int)); //needed?
+    //memset(socked_mapping, 0, 1024 * sizeof(int)); //needed?
 
     //workaround... fix this ugly construct
     /* //now as configuration: SCION server 10.80.45.128:123 1-ff00:0:110,10.80.45.83:11111
@@ -135,11 +166,6 @@ void SCION_Initialise()
     strcpy(client->addressIP, "10.80.45.1");
     strcpy(client->addressSCION, "1-ff00:0:110,10.80.45.83:44444");
     ntpClients[2] = client;
-}
-
-void SCION_TestCall(int a)
-{
-    printf("SCION_TestCall:: a=%d\n", a);
 }
 
 int ts_flags_p52 = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE | SOF_TIMESTAMPING_RAW_HARDWARE | SOF_TIMESTAMPING_RX_HARDWARE | SOF_TIMESTAMPING_OPT_PKTINFO | SOF_TIMESTAMPING_OPT_TX_SWHW | SOF_TIMESTAMPING_OPT_CMSG;
@@ -201,6 +227,11 @@ be enabled for individual sendmsg calls using cmsg (1.3.4).
 int SCION_close(int sock_fd)
 {
     DEBUG_LOG("Closing socket %d", sock_fd);
+
+    SCIONgoclose(sock_fd);
+
+    SCIONPrintState(sock_fd);
+
     if (sock_fd == highest_fd)
     {
         highest_fd--;
@@ -209,11 +240,10 @@ int SCION_close(int sock_fd)
 
     if (fdInfos[sock_fd] != NULL)
     {
-        free(fdInfos[sock_fd]); //TODO okay? :-D
+        free(fdInfos[sock_fd]);
     }
 
     return close(sock_fd);
-    //return SCIONgoclose(sock_fd);
 }
 
 /* Emulates "return socket (__domain, __type,__protocol)"
@@ -273,12 +303,18 @@ int SCION_socket(int __domain, int __type, int __protocol)
         DEBUG_LOG("Setting highest_fd=%d ", highest_fd);
     }
     //c2go scion api
-    //int fd2 = SCIONgosocket(__domain, __type, __protocol);
-    //printf("fd2=%d\n", fd2);
-
+    int SCION_fd = SCIONgosocket(__domain, __type, __protocol, sinfo);
+    if (fd != SCION_fd)
+    {
+        LOG_FATAL("fd != SCION_fd i.e. %d != %d", fd, SCION_fd);
+    }
+    SCIONPrintState(fd);
     return fd;
 }
 
+/*
+TODO TX/RX detection has to be generic...
+*/
 int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval, socklen_t __optlen)
 {
     DEBUG_LOG("Setting options fd=%d level=%d optname=%d", __fd, __level, __optname);
@@ -349,6 +385,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         break;
     }
 
+    int createTxTimestamp = 0;
+    int createRxTimestamp = 0;
     if (*((int *)__optval) != 0)
     {
         DEBUG_LOG("\t\t optval = %d => activate option", *((int *)__optval));
@@ -357,10 +395,14 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
             if (*((int *)__optval) == ts_flags_p52)
             { //access ts_flags in ntp_io_linux
                 DEBUG_LOG("\t\t\t\t|-----> This is the option to activate RX-Timestamps (HW/Kernel)");
+                createTxTimestamp = 0;
+                createRxTimestamp = 1;
             }
             if (*((int *)__optval) == (ts_flags_p52 | ts_tx_flags_p52))
             { //access ts_flags in ntp_io_linux
                 DEBUG_LOG("\t\t\t\t|-----> This is the option to activate TX/RX-Timestamps (HW/Kernel)");
+                createTxTimestamp = 1;
+                createRxTimestamp = 1;
             }
         }
     }
@@ -378,6 +420,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     {
         fdInfo *fdi = fdInfos[__fd];
         fdi->level_optname_value[scion_level][scion_optname] = *((int *)__optval);
+        fdi->createTxTimestamp = createTxTimestamp;
+        fdi->createRxTimestamp = createRxTimestamp;
     }
     if (result < 0)
     {
@@ -401,7 +445,7 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
 
     if (fdInfos[__fd] != NULL) //should always be true
     {
-        fdInfo *fdi = fdInfos[__fd];
+        fdInfo *fdi = fdInfos[__fd]; //hier wird es vermutlich auch jeweils überschrieben
         SCK_SockaddrToIPSockAddr(__addr, __len, &fdi->boundTo);
         DEBUG_LOG("\t|---->%s", UTI_IPSockAddrToString(&fdi->boundTo));
 
@@ -428,12 +472,9 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
 {
     //ist this an ntp server..... should normally be the case
 
-    //TODO ist this safe?? Buffer??? CHANGE THIS!!!!
+    //TODO ist this safe?? Buffer??? CHANGE THIS!!!! Should be okay...
     char *remoteAddress = UTI_IPSockAddrToString(addr);
 
-    //TODO 1 Solve this for all cases
-    //char *ntpServer1 = "10.80.45.128:123";
-    //char *ntpServer1AsScionAddress = "1-ff00:0:110,10.80.45.83:11111";
     DEBUG_LOG("Connecting socket fd=%d to %s", __fd, remoteAddress);
 
     char *ntpServerAsScionAddress = getNTPServerSCIONAddress(remoteAddress);
@@ -447,9 +488,12 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
             strcpy(fdi->remoteAddress, remoteAddress);
             strcpy(fdi->remoteAddressSCION, ntpServerAsScionAddress);
         }
+        else
+        {
+            LOG_FATAL("Corrupted datastructure: fdInfos[%d] doesn't exist", __fd);
+        }
     }
 
-    
     return connect(__fd, __addr, __len);
 }
 
@@ -466,12 +510,12 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
     }
 
     int status;
+    /* Chronyd talks as a Client to a Server */
     if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
     {
         DEBUG_LOG("\t|----> using SCION");
-        //This implies we are using SCION
         DEBUG_LOG("\t|----> connected to %s i.e. %s\n", fdInfos[__fd]->remoteAddress, fdInfos[__fd]->remoteAddressSCION);
-        status = SCIONgosendmsg(__fd, __message, __flags, fdInfos[__fd]->remoteAddressSCION);
+        status = SCIONgosendmsg(__fd, __message, __flags);
         DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
         //TODO remove sendmsg()
@@ -487,9 +531,10 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
         {
         case AF_INET:
         {
+            /* Chronyd talks as a Server to a Client */
 
-            //TODO fix this ugly construct
-            char remoteAddress[MAXADDRESSLENGTH] = ""; //initialozation is needed!!!
+            //TODO fix this ugly construct: depends on how the GO-Part registers the clients
+            char remoteAddress[MAXADDRESSLENGTH] = ""; //initialization is needed!!!
             strcat(remoteAddress, inet_ntoa(((struct sockaddr_in *)__message->msg_name)->sin_addr));
             /* TODO: Add port
             strcat(remoteAddress, ":");
@@ -503,7 +548,7 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
             if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
             {
                 DEBUG_LOG("\t|----> using SCION address %s", clientAsScionAddress);
-                status = SCIONgosendmsg(__fd, __message, __flags, clientAsScionAddress);
+                status = SCIONgosendmsg(__fd, __message, __flags);
                 DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
                 //TODO remove sendmsg()
@@ -529,9 +574,8 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
     return status;
 }
 
-typedef struct mmsghdr recvHdr;
-
-typedef union sockaddr_all
+//TODO How to prevent redeclaration? Is defined in (chrony's) socket.c
+union sockaddr_all
 {
     struct sockaddr_in in4;
 #ifdef FEAT_IPV6
@@ -539,11 +583,11 @@ typedef union sockaddr_all
 #endif
     struct sockaddr_un un;
     struct sockaddr sa;
-} sockaddr_all;
+};
 
 void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 {
-   // int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) || (SCION_TYPE == SCION_IP_RX_NTP_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
+    // int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) || (SCION_TYPE == SCION_IP_RX_NTP_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
     int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
     int sendNTP = SCION_TYPE == SCION_IP_TX_NTP_MSG ? 1 : 0;
     int receiveNTP = SCION_TYPE == SCION_IP_RX_NTP_MSG ? 1 : 0;
@@ -620,10 +664,12 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
         struct cmsghdr *cmsg;
         for (cmsg = CMSG_FIRSTHDR(msg_hdr); cmsg; cmsg = CMSG_NXTHDR(msg_hdr, cmsg))
         {
+            int processed = 0;
             DEBUG_LOG("\t\t\t\tProcessing *cmsghdr@%p\tcmsg->cmsg_level=%d\tcmsg->cmsg_type=%d", cmsg, cmsg->cmsg_level, cmsg->cmsg_type);
 #ifdef HAVE_IN_PKTINFO
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO)
             {
+                processed = 1;
                 DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type IP_PKTINFO", cmsg);
 
                 struct in_pktinfo ipi;
@@ -636,8 +682,22 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 
 #endif
 
+#ifdef HAVE_LINUX_TIMESTAMPING
+#ifdef HAVE_LINUX_TIMESTAMPING_OPT_PKTINFO
+            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING_PKTINFO)
+            {
+                processed = 1;
+                struct scm_ts_pktinfo ts_pktinfo;
+
+                memcpy(&ts_pktinfo, CMSG_DATA(cmsg), sizeof(ts_pktinfo));
+                DEBUG_LOG("\t\t\t\t\tts_pktinfo.if_index=%u", ts_pktinfo.if_index);
+                DEBUG_LOG("\t\t\t\t\tts_pktinfo.pkt_length=%u", ts_pktinfo.pkt_length);
+            }
+#endif
+
             if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING)
-            { //mefi84 Kernel Timestamps / HW Timestamps werden in seperaten Messages erhalten
+            {
+                processed = 1;
                 DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type SO_TIMESTAMPING", cmsg);
 
                 struct scm_timestamping ts3;
@@ -657,6 +717,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 
             if (cmsg->cmsg_level == SOL_IP && cmsg->cmsg_type == IP_RECVERR)
             {
+                processed = 1;
                 DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type IP_RECVERR", cmsg);
                 struct sock_extended_err *sock_err;
                 sock_err = (struct sock_extended_err *)CMSG_DATA(cmsg);
@@ -671,6 +732,12 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
                 {
                     DEBUG_LOG("\t\t\t\t|-----> everything as excpected. Can be ignored");
                 }
+            }
+#endif
+
+            if (!processed)
+            {
+                DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type UNKNOWN", cmsg);
             }
         }
 
@@ -783,6 +850,7 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
     /*Receive up to VLEN messages as described by VMESSAGES from socket FD.
    Returns the number of messages received or -1 for errors.*/
     int n;
+    //CHronyd acts as a Client
     if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
     {
         /*
@@ -798,6 +866,7 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
     }
+    //Chronyd acts as the NTP Server
     else if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
     {
         n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);

@@ -20,15 +20,22 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
 
 
 #line 3 "scion_api.go"
+ #include "config.h"
  #include "ntp.h"
  #include <sys/types.h>
  #include <sys/socket.h>
  #include <sys/select.h>
+ typedef struct fdInfo *fdInfoPtr;
  typedef const struct msghdr *msghdrConstPtr;
  typedef struct timeval *timevalPtr;
  typedef fd_set *fdsetPtr;
  typedef struct mmsghdr *mmsghdrPtr;
  typedef struct timespec *timespecPtr;
+ typedef char *charPtr;
+ #ifndef _SCION_API_H
+ #define _SCION_API_H
+ #include "scion.h"
+ #endif
 
 #line 1 "cgo-generated-wrapper"
 
@@ -81,15 +88,23 @@ extern "C" {
 #endif
 
 
-extern int SCIONgosocket(int p0, int p1, int p2);
+// SetSciondAddr is a pretty cool function... would be even cooler without a line break :-(
+
+extern int SetSciondAddr(char* p0);
+
+// SetLocalAddr registers Chrony's SCION address (ex: 1-ff00:0:112,10.80.45.83)
+
+extern int SetLocalAddr(char* p0);
+
+extern void SCIONPrintState(int p0);
+
+extern int SCIONgosocket(int p0, int p1, int p2, fdInfoPtr p3);
 
 extern int SCIONgoclose(int p0);
 
 extern int SCIONselect(int p0, fdsetPtr p1, fdsetPtr p2, fdsetPtr p3, timevalPtr p4);
 
-extern ssize_t SCIONgosendmsg(int p0, msghdrConstPtr p1, int p2, char* p3);
-
-extern GoInterface SendSomething();
+extern ssize_t SCIONgosendmsg(int p0, msghdrConstPtr p1, int p2);
 
 extern int SCIONgorecvmmsg(int p0, mmsghdrPtr p1, unsigned int p2, int p3, timespecPtr p4);
 
