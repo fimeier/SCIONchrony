@@ -25,6 +25,7 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
  #include <sys/types.h>
  #include <sys/socket.h>
  #include <sys/select.h>
+ #include <linux/errqueue.h>
  typedef struct fdInfo *fdInfoPtr;
  typedef const struct msghdr *msghdrConstPtr;
  typedef struct timeval *timevalPtr;
@@ -32,6 +33,7 @@ typedef struct { const char *p; ptrdiff_t n; } _GoString_;
  typedef struct mmsghdr *mmsghdrPtr;
  typedef struct timespec *timespecPtr;
  typedef char *charPtr;
+ typedef char *intPtr;
  #ifndef _SCION_API_H
  #define _SCION_API_H
  #include "scion.h"
@@ -98,6 +100,10 @@ extern int SetLocalAddr(char* p0);
 
 extern void SCIONPrintState(int p0);
 
+extern int SCIONgoconnect(int p0);
+
+extern int SCIONgosetsockopt(int p0);
+
 extern int SCIONgosocket(int p0, int p1, int p2, fdInfoPtr p3);
 
 extern int SCIONgoclose(int p0);
@@ -105,6 +111,8 @@ extern int SCIONgoclose(int p0);
 extern int SCIONselect(int p0, fdsetPtr p1, fdsetPtr p2, fdsetPtr p3, timevalPtr p4);
 
 extern ssize_t SCIONgosendmsg(int p0, msghdrConstPtr p1, int p2);
+
+// SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff
 
 extern int SCIONgorecvmmsg(int p0, mmsghdrPtr p1, unsigned int p2, int p3, timespecPtr p4);
 

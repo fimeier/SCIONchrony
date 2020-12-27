@@ -5,6 +5,7 @@ package main
 // #include <sys/types.h>
 // #include <sys/socket.h>
 // #include <sys/select.h>
+// #include <linux/errqueue.h>
 // typedef struct fdInfo *fdInfoPtr;
 // typedef const struct msghdr *msghdrConstPtr;
 // typedef struct timeval *timevalPtr;
@@ -12,6 +13,7 @@ package main
 // typedef struct mmsghdr *mmsghdrPtr;
 // typedef struct timespec *timespecPtr;
 // typedef char *charPtr;
+// typedef char *intPtr;
 // #ifndef _SCION_API_H
 // #define _SCION_API_H
 // #include "scion.h"
@@ -22,7 +24,9 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/scionproto/scion/go/lib/addr"
@@ -34,20 +38,71 @@ import (
 
 /* TODO:
 -DO something useful with the Context
+-CGO: Dataexchange performance (Kernel Threads?), memory model for cgo-ROutines accessing c-Pointers (sync?)
+---->eignetlich sollte es "keinen" overhead geben, da lediglich Daten ausgetauscht werden
+---->falls doch, daten auf andere art austauschen?
+-FDSTATUS in Map..... s, exists := fdstatus[fd] s.ändern.... dann zurückspeichern.... buggy
+-------->array mit fd als index auf struct ptr
+-send() behaviour as it is nonblocking... start go routine? return value?
+------> allenfalls rcv erst wärend erstem send starten (wie sollte logik sein...)
+---> work with fdstatus[fd] or its copy....
+---> non blocking send: Buffer wie lange muss dieser bestehen bleiben (mal rein für C)
+-----------> Chrony überschreibt ihn im allgemeinen ja erst wenn eine nachricht empfangen wird für diesesn Socket
 */
 
 /*
 go build -buildmode=c-shared -o scion_api.so *.go
 */
 
-/* FDSTATUS contains EVERYTHING */
+//FDSTATUS contains EVERYTHING
 type FDSTATUS struct {
-	Fd                 int         //fd corresponds to the socket number as used by chrony (could also be a pseudo fd)
-	Sinfo              C.fdInfoPtr //Pointer to fdInfo c-Struct
-	Sent               chan int    //test entry: number of bytes sent
-	remoteAddress      string
+	/*TODO: Decide how to use it/change it..... */
+	Fd    int         //fd corresponds to the socket number as used by chrony (could also be a pseudo fd)
+	Sinfo C.fdInfoPtr //Pointer to fdInfo c-Struct
+	//nonblocking        bool
+	//dgram              bool
+	sent               chan int //test entry: number of bytes sent
+	remoteAddress      string   //IP address
 	remoteAddressSCION string
+	rAddr              *snet.UDPAddr
+	sdc                sciond.Connector
+	pds                *snet.DefaultPacketDispatcherService
+	ps                 []snet.Path
+	selectedPath       snet.Path
+	ctx                context.Context
+	conn               snet.PacketConn
+	localPortSCION     uint16        //fix this: bzw vgl mit localAddr.Host.Port = 0 //ignore user defined srcport
+	connected          bool          //if set => SCIONgoconnect() finished without errors
+	doneRcv            chan struct{} //close this to stop everything related to receiving
+	rcvQueueNTPTS      chan rcvMsgNTPTS
+	sendQueueTS        chan sendMsgTS
+	rcvLogicStarted    bool
+	createTxTimestamp  bool
+	txKERNELts         bool //use this
+	txHWts             bool //use this
+	createRxTimestamp  bool //TODO Adapt logig for recv (started after connect, but before setsockopts..)
+
 }
+
+type rcvMsgNTPTS struct {
+	pkt snet.Packet
+	ov  net.UDPAddr
+}
+type sendMsgTS struct {
+	tsType  int
+	payload []byte
+	ts3     C.struct_scm_timestamping
+	sentTo  *snet.UDPAddr
+}
+
+const (
+	tskernelhardware = iota + 1
+	tskernel
+	tshardware
+	rxkernelhardware
+	rxkernel
+	rxhardware
+)
 
 type NTP_int64 struct {
 	hi uint32
@@ -76,13 +131,26 @@ type NTP_Packet struct {
 	//extensions [C.NTP_MAX_EXTENSIONS_LENGTH]uint8
 }
 
+func cancelled(done chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
 func init() {
 	log.Printf("(Init) Changing logging behaviour....")
 
 	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.LUTC)
 
-	if C.DEBUG == 0 {
+	/*if C.DEBUG == 0 {
 		log.Printf("(Init) log.* Output has been disabled as #define DEBUG 0 is set")
+		log.SetOutput(ioutil.Discard)
+	}*/
+	if C.GODEBUG == 0 {
+		log.Printf("(Init) log.* Output has been disabled as #define GODEBUG 0 is set")
 		log.SetOutput(ioutil.Discard)
 	}
 	log.Printf("(Init) ....logging behaviour has been changed")
@@ -91,6 +159,8 @@ func init() {
 	sciondAddr = sciond.DefaultAPIAddress
 	localAddrStr = "1-ff00:0:112,10.80.45.83" //TODO parse the local address from somewhere
 	localAddr, _ = snet.ParseUDPAddr(localAddrStr)
+	localAddr.Host.Port = 0 //ignore user defined srcport
+
 }
 
 var sciondAddr string
@@ -112,6 +182,7 @@ func SetLocalAddr(_localAddr *C.char) C.int {
 	localAddrStr = C.GoString(C.charPtr(unsafe.Pointer(_localAddr)))
 	log.Printf("(SetLocalAddr) Setting localAddr = %v", localAddrStr)
 	localAddr, _ = snet.ParseUDPAddr(localAddrStr)
+	localAddr.Host.Port = 0 //ignore user defined srcport
 	return C.int(1)
 }
 
@@ -141,10 +212,161 @@ func PrintState(fd int) {
 	log.Printf("(PrintState) fd=%d domainS=%d type=%d protocolS=%d connectionType=%d sinfo=%p\n", fd, domain, _type, protocol, connectionType, state.Sinfo)
 }
 
+//export SCIONgoconnect
+func SCIONgoconnect(_fd C.int) C.int {
+	fd := int(_fd)
+	s, exists := fdstatus[fd]
+	if !exists {
+		log.Printf("(SCIONgoconnect) There is no state available for fd=%d\n", fd)
+		return C.int(-1)
+	}
+
+	var err error
+
+	s.remoteAddress = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddress)))
+	s.remoteAddressSCION = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddressSCION)))
+
+	s.rAddr, err = snet.ParseUDPAddr(s.remoteAddressSCION)
+	if err != nil {
+		log.Printf("(SCIONgoconnect) Couldn't parse \"%v\" go error: %v", s.remoteAddressSCION, err)
+		return C.int(-1)
+	}
+
+	s.ctx = context.Background()
+	s.sdc, err = sciond.NewService(sciondAddr).Connect(s.ctx)
+	if err != nil {
+		log.Printf("(SCIONgoconnect) Failed to create SCION connector:", err)
+		return C.int(-1)
+	}
+	s.pds = &snet.DefaultPacketDispatcherService{
+		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
+		SCMPHandler: snet.DefaultSCMPHandler{
+			RevocationHandler: sciond.RevHandler{Connector: s.sdc},
+		},
+	}
+
+	s.ps, err = s.sdc.Paths(s.ctx, s.rAddr.IA, localAddr.IA, sciond.PathReqFlags{Refresh: true})
+	if err != nil {
+		log.Printf("(SCIONgoconnect) Failed to lookup core paths: %v:", err)
+		return C.int(-1)
+	}
+
+	log.Printf("(SCIONgoconnect) Available paths to %v:\n", s.rAddr.IA)
+	for _, p := range s.ps {
+		log.Printf("(SCIONgoconnect)  \t%v\n", p)
+	}
+
+	s.selectedPath = s.ps[0]
+	log.Printf("(SCIONgoconnect)  Selected path to %v: %v\n", s.rAddr.IA, s.selectedPath)
+
+	s.rAddr.Path = s.selectedPath.Path()
+	s.rAddr.NextHop = s.selectedPath.UnderlayNextHop()
+
+	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, addr.SvcNone)
+	if err != nil {
+		log.Printf("(SCIONgoconnect)  Failed to register client socket:", err)
+		return C.int(-1)
+	}
+
+	s.connected = true
+	s.sent = make(chan int)
+	s.doneRcv = make(chan struct{})
+	s.rcvQueueNTPTS = make(chan rcvMsgNTPTS, int(C.MSGBUFFERSIZE))
+	s.sendQueueTS = make(chan sendMsgTS, int(C.MSGBUFFERSIZE))
+
+	//ASSUMPTION: CONNECTED_TO_NTP_SERVER => RX/TX will be activated (workarround for rcvlogic)
+	//s.createRxTimestamp = true
+	//s.createTxTimestamp = true
+
+	fdstatus[fd] = s //store it back
+	log.Printf("(SCIONgoconnect) Created Connection. rcvLogic() not started")
+
+	//TODO: ACHTUNG SETTINGS sockopt sind hier nicht gesetzt
+	//log.Printf("(SCIONgoconnect) Starting Rcv-Go-Routine")
+	//go s.rcvLogic() //bei send drin...
+
+	return C.int(0) //TODO -1 for errors
+}
+
+func (s *FDSTATUS) rcvLogic() {
+	log.Printf("(rcvLogic fd=%v) Started", s.Fd)
+	for {
+		if cancelled(s.doneRcv) {
+			log.Printf("(rcvLogic fd=%v) I have been cancelled. Returning.", s.Fd)
+			return
+		}
+
+		//Memory Model, sync?
+
+		log.Printf("(rcvLogic fd=%v) Receive ntp packet from chronyScion", s.Fd)
+		//log.Printf("")
+		var pkt snet.Packet
+		var ov net.UDPAddr
+		second := time.Now().Add(time.Second)
+		s.conn.SetReadDeadline(second)
+		log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
+		err := s.conn.ReadFrom(&pkt, &ov)
+		log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
+		if err != nil {
+			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+			continue
+		}
+		pld, ok := pkt.Payload.(snet.UDPPayload)
+		if !ok {
+			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet payload", s.Fd)
+			continue
+		}
+
+		payload := pld.Payload
+		log.Printf("(rcvLogic fd=%v) \t---->Received payload: \"%v\"\n", s.Fd, payload)
+
+		payloadLen := len(payload)
+		ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
+
+		//adhoc security.... improve this
+		if payloadLen < ntpSize {
+			fmt.Printf("(rcvLogic fd=%v) \t---->payload can't be a NTP packet (%d < %d) (IGNORING THIS...\n", payloadLen, ntpSize)
+			//continue
+		}
+
+		/* the only thing really important comes here.. */
+		msg := rcvMsgNTPTS{pkt, ov}
+		s.rcvQueueNTPTS <- msg
+	}
+
+}
+
+//export SCIONgosetsockopt
+func SCIONgosetsockopt(_fd C.int) C.int {
+	fd := int(_fd)
+	s, exists := fdstatus[fd]
+	if !exists {
+		log.Fatal("(SCIONgosetsockopt) Non-existing fdstatus[%d]\n", fd) //change this to fatal?
+		return C.int(-1)
+	}
+
+	/*Will be set everytime the function is called....
+	int level_optname_value[SCION_LE_LEN][SCION_OPTNAME_LEN]; //optval !=0 0==disabled contains all the other informations
+	*/
+	s.createTxTimestamp = int(s.Sinfo.createTxTimestamp) == 1
+	s.createRxTimestamp = int(s.Sinfo.createRxTimestamp) == 1
+
+	fdstatus[fd] = s //store it back
+
+	log.Printf("(SCIONgosetsockopt) Called for socket %d. Checking settings...\n", fd)
+	log.Printf("(SCIONgosetsockopt) \t|---->  createTxTimestamp=%v", s.createTxTimestamp)
+	log.Printf("(SCIONgosetsockopt) \t|---->  createRxTimestamp=%v", s.createRxTimestamp)
+
+	/*On success, zero is returned for the standard options.  On error, -1
+	is returned, and errno is set appropriately.*/
+	return C.int(0)
+}
+
 //export SCIONgosocket
 func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr) C.int {
 	fd := int(sinfo.fd)
-	log.Printf("(SCIONgosocket) \"Creating socket\" %d\n", fd)
+	log.Printf("(SCIONgosocket fd=) \"Creating socket\" %d\n", fd, fd)
+	log.Printf("(SCIONgosocket fd=) \t|----> TODO parse/add socket settings like SOCK_NONBLOCK, type, etc...", fd)
 
 	/*
 		domainS := int(sinfo.domain)
@@ -161,15 +383,42 @@ func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr)
 	}
 
 	newState := FDSTATUS{Fd: fd, Sinfo: sinfo}
-
+	//store it back
 	fdstatus[fd] = newState
+
+	//code snippets
+	d := int(fdstatus[fd].Sinfo.domain)
+	t := int(fdstatus[fd].Sinfo._type)
+	p := int(fdstatus[fd].Sinfo.protocol)
+	log.Printf("(SCIONgosocket fd=%v) \t|----> domain=%v type=%v protocol=%v", fd, d, t, p)
+	if t == int(C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK) {
+		log.Printf(" \t|----> type == C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK")
+	}
+	if int(fdstatus[fd].Sinfo._type&C.SOCK_DGRAM) == C.SOCK_DGRAM {
+		log.Printf(" \t|----> type => C.SOCK_DGRAM")
+	}
+	if int(fdstatus[fd].Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK {
+		log.Printf(" \t|----> type => C.SOCK_NONBLOCK")
+	}
 
 	return C.int(newState.Fd)
 }
 
 //export SCIONgoclose
-func SCIONgoclose(fd C.int) C.int {
+func SCIONgoclose(_fd C.int) C.int {
+	fd := int(_fd)
 	log.Printf("(SCIONgoclose) \"Closing socket\" %d\n", fd)
+	s, exists := fdstatus[fd]
+	if !exists {
+		log.Fatal("(SCIONgoclose) Non-existing fdstatus[%d]\n", fd) //change this to fatal?
+		return C.int(-1)
+	}
+	if s.doneRcv != nil {
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel")
+		close(s.doneRcv)
+	} else {
+		log.Printf("(SCIONgoclose) ----> There is no doneRcv channel. Nothing to close")
+	}
 	//todo: what else needs to be done?
 	delete(fdstatus, int(fd))
 
@@ -201,14 +450,22 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 //export SCIONgosendmsg
 func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t {
 	fd := int(_fd)
-	status, exists := fdstatus[fd]
+	_, exists := fdstatus[fd]
 	if !exists {
 		log.Fatal("(SCIONgosendmsg) Non-existing fdstatus[%d]\n", fd) //change this to fatal?
 		return C.ssize_t(-1)                                          //TODO correct return value for sendmsg()?
 	}
 
-	status.remoteAddress = C.GoString(C.charPtr(unsafe.Pointer(&status.Sinfo.remoteAddress)))
-	status.remoteAddressSCION = C.GoString(C.charPtr(unsafe.Pointer(&status.Sinfo.remoteAddressSCION)))
+	if !fdstatus[fd].rcvLogicStarted {
+		log.Printf("(SCIONgosendmsg) Starting Rcv-Go-Routine")
+		s := fdstatus[fd]
+		s.rcvLogicStarted = true
+		fdstatus[fd] = s
+		go s.rcvLogic()
+	}
+
+	//s.remoteAddress = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddress)))
+	//s.remoteAddressSCION = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddressSCION)))
 
 	//msg := copyCstructMSGHDR(message)
 	msg := *(*syscall.Msghdr)(unsafe.Pointer(message))
@@ -216,15 +473,53 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t 
 	ntp := *(*NTP_Packet)(unsafe.Pointer(msg.Iov.Base))
 
 	//fmt.Printf("msg = %v\n", msg)
-	log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, status.remoteAddress, status.remoteAddressSCION)
+	log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, fdstatus[fd].remoteAddress, fdstatus[fd].remoteAddressSCION)
+	log.Printf("(SCIONgosendmsg)  \t|---->  fd=%v", fdstatus[fd].Fd)
+	log.Printf("(SCIONgosendmsg)  \t|---->  createTxTimestamp local=%v c-world=%v", fdstatus[fd].createTxTimestamp, fdstatus[fd].Sinfo.createTxTimestamp)
+	log.Printf("(SCIONgosendmsg)  \t|---->  createRxTimestamp local=%v c-world=%v", fdstatus[fd].createRxTimestamp, fdstatus[fd].Sinfo.createRxTimestamp)
 
-	return C.ssize_t(sendmsgOverScion(msg.Iov, &status))
+	//TODO NONBLOCKING == start go routine... return value????
+	//Assuming
+	s := fdstatus[fd]
+	go s.sendmsgOverScion(msg.Iov)
+
+	//return C.ssize_t(<-fdstatus[fd].sent)
+	bytesSent := <-s.sent
+	return C.ssize_t(bytesSent)
+
 }
 
-func sendmsgOverScion(iovec *syscall.Iovec, status *FDSTATUS) (bytesSent int) {
+func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
+	log.Printf("(sendmsgOverScion fd=%v) Started", s.Fd)
+
+	nonblocking := int(s.Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK
+
+	var err error
+	var remoteAddr *snet.UDPAddr
+	if s.connected {
+		remoteAddr = s.rAddr
+	} else {
+		log.Fatal("(sendmsgOverScion) Unconnected case needs to be implemended....")
+		s.sent <- int(-1)
+		return //should never reach this point....
+	}
+
+	if s.sent == nil {
+		log.Fatal("(sendmsgOverScion) Send channel needs to be implemended....")
+	}
 
 	iovecLen := iovec.Len
 	iovecBase := iovec.Base
+
+	if nonblocking {
+		log.Printf("(sendmsgOverScion fd=%v) |----> type => C.SOCK_NONBLOCK => returning direcly without blocking)", s.Fd)
+		//This allows SCIONgosendmsg() to return, i.e. it is a non blocking send
+		s.sent <- int(iovecLen)
+	}
+
+	if s.createTxTimestamp {
+		log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps", s.Fd)
+	}
 
 	payload := C.GoBytes(unsafe.Pointer(iovecBase), C.int(iovecLen))
 
@@ -235,46 +530,9 @@ func sendmsgOverScion(iovec *syscall.Iovec, status *FDSTATUS) (bytesSent int) {
 	*/
 	//fmt.Printf("iovecLen = %v\tiovecBase = %v\tpayload = %v\n", iovecLen, iovecBase, payload)
 
-	var remoteAddr *snet.UDPAddr
-	remoteAddr, _ = snet.ParseUDPAddr(status.remoteAddressSCION)
+	conn := s.conn
 
-	var err error
-	ctx := context.Background()
-	sdc, err := sciond.NewService(sciondAddr).Connect(ctx)
-	if err != nil {
-		log.Fatal("Failed to create SCION connector:", err)
-	}
-	pds := &snet.DefaultPacketDispatcherService{
-		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
-		SCMPHandler: snet.DefaultSCMPHandler{
-			RevocationHandler: sciond.RevHandler{Connector: sdc},
-		},
-	}
-
-	ps, err := sdc.Paths(ctx, remoteAddr.IA, localAddr.IA, sciond.PathReqFlags{Refresh: true})
-	if err != nil {
-		log.Fatal("Failed to lookup core paths: %v:", err)
-	}
-
-	log.Printf("(sendmsgOverScion) Available paths to %v:\n", remoteAddr.IA)
-	for _, p := range ps {
-		log.Printf("(sendmsgOverScion) \t%v\n", p)
-	}
-
-	sp := ps[0]
-	log.Printf("(sendmsgOverScion) Selected path to %v: %v\n", remoteAddr.IA, sp)
-
-	remoteAddr.Path = sp.Path()
-	remoteAddr.NextHop = sp.UnderlayNextHop()
-
-	localAddr.Host.Port = 0 //ignore user defined srcport
-
-	conn, localPort, err := pds.Register(ctx, localAddr.IA, localAddr.Host, addr.SvcNone)
-	if err != nil {
-		log.Fatal("Failed to register client socket:", err)
-	}
-
-	log.Printf("(sendmsgOverScion) Sending in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, localPort, addr.SvcNone)
+	log.Printf("(sendmsgOverScion) Sending in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, s.localPortSCION, addr.SvcNone)
 	log.Printf("(sendmsgOverScion) \tDestination:  IP:Port ist in %v on %v:%d - %v\n", remoteAddr.IA, remoteAddr.Host.IP, remoteAddr.Host.Port, addr.SvcNone)
 
 	pkt := &snet.Packet{
@@ -289,27 +547,234 @@ func sendmsgOverScion(iovec *syscall.Iovec, status *FDSTATUS) (bytesSent int) {
 			},
 			Path: remoteAddr.Path,
 			Payload: snet.UDPPayload{
-				SrcPort: localPort,
-				DstPort: uint16(remoteAddr.Host.Port),
-				Payload: payload, //[]byte("Hello, world!"),
+				SrcPort: s.localPortSCION,             //ev kann das hier benutzt werden JOP ist UDP Port
+				DstPort: uint16(remoteAddr.Host.Port), //ev kann das hier benutzt werden JOP so ist es
+				Payload: payload,                      //[]byte("Hello, world!"),
 			},
 		},
 	}
 
+	//ALWAYS create TX timestamp..--- change this
+	fakeKernelSentTime := time.Now() //HW time komplett anders
+	//fakeHardwareSentTime := time.Now() //HW time komplett anders
 	err = conn.WriteTo(pkt, remoteAddr.NextHop)
 	if err != nil {
 		log.Printf("(sendmsgOverScion) [%d] Failed to write packet: %v\n", err)
-		return -1
+		s.sent <- int(-1)
+		return
+	}
+	if !nonblocking {
+		s.sent <- int(iovecLen)
 	}
 
-	return len(payload)
+	sendMsg := false
+	var msgTS sendMsgTS
+
+	sendMsg = true
+	msgTS.tsType = tskernelhardware
+	msgTS.payload = payload
+	msgTS.sentTo = remoteAddr
+
+	//add TS's: Src needs to be adpted afte SCION provides the correct TS's
+	if s.createTxTimestamp {
+		sendMsg = true
+		var ts3 C.struct_scm_timestamping
+		//kernel ts
+		ts3.ts[0].tv_sec = C.long(fakeKernelSentTime.Unix())
+		ts3.ts[0].tv_nsec = C.long(fakeKernelSentTime.UnixNano() - fakeKernelSentTime.Unix()*1e9)
+		//hardware ts
+		ts3.ts[2].tv_sec = C.long(0)  //C.long(fakeHardwareSentTime.Unix())
+		ts3.ts[2].tv_nsec = C.long(0) //C.long(fakeHardwareSentTime.UnixNano() - fakeHardwareSentTime.Unix()*1e9)
+		log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3=%v", s.Fd, ts3)
+		msgTS.ts3 = ts3
+	}
+
+	if sendMsg {
+		log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
+		s.sendQueueTS <- msgTS
+	} else {
+		log.Printf("(sendmsgOverScion fd=%v) Will not create any messages for Timestamps.", s.Fd)
+	}
+	log.Printf("(sendmsgOverScion) \t----->Done")
 
 }
 
+// SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff
 //export SCIONgorecvmmsg
-func SCIONgorecvmmsg(fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int, tmo C.timespecPtr) C.int {
+func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int, tmo C.timespecPtr) C.int {
+	fd := int(_fd)
+	s, exists := fdstatus[fd]
+	if !exists {
+		log.Fatal("(SCIONgorecvmmsg) Non-existing fdstatus[%d]\n", fd)
+		return C.int(-1)
+	}
 
-	return C.int(42)
+	log.Printf("(SCIONgorecvmmsg) Receiving messages for i.e. %v:%v", localAddrStr, s.localPortSCION)
+
+	//Do something with this info... is more than needed... motivated by printMMSGHDR()
+	var receiveFlag int
+	var receiveFlagStr string
+	var scionType int
+	var scionTypeStr string
+	var dataEncapLayer2 bool
+	var receiveNTP bool
+	var returnTxTS bool
+	if flags&C.MSG_ERRQUEUE > 0 {
+		receiveFlag = int(C.SCION_MSG_ERRQUEUE)
+		receiveFlagStr = "C.SCION_MSG_ERRQUEUE"
+		scionType = int(C.SCION_IP_TX_ERR_MSG)
+		scionTypeStr = "C.SCION_IP_TX_ERR_MSG"
+		receiveNTP = false
+		dataEncapLayer2 = true
+		returnTxTS = true
+	} else {
+		receiveFlag = int(C.SCION_FILE_INPUT)
+		receiveFlagStr = "C.SCION_FILE_INPUT"
+		scionType = int(C.SCION_IP_RX_NTP_MSG)
+		scionTypeStr = "SCION_IP_RX_NTP_MSG"
+		receiveNTP = true
+		dataEncapLayer2 = false
+	}
+	log.Printf("(SCIONgorecvmmsg) ----> receiveFlag = %v (%v)", receiveFlag, receiveFlagStr)
+	log.Printf("(SCIONgorecvmmsg) ----> scionType = %v (%v)", scionType, scionTypeStr)
+	log.Printf("(SCIONgorecvmmsg) ----> receiveNTP?  %v", receiveNTP)
+	log.Printf("(SCIONgorecvmmsg) ----> dataEncapLayer2?  %v", dataEncapLayer2)
+
+	n := len(s.rcvQueueNTPTS)
+	log.Printf("(SCIONgorecvmmsg) ----> number of received messages on fd=%v is %v", fd, n)
+	nError := len(s.sendQueueTS)
+	log.Printf("(SCIONgorecvmmsg) ----> number of received ERROR-messages on fd=%v is %v", fd, nError)
+	/*if nError > 0 {
+		sendMsgTS := <-s.sendQueueTS
+		log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
+	}*/
+
+	//TODO VLEN check
+
+	updatedElemmsgvec := 0
+	if returnTxTS && nError > 0 {
+
+		sendMsgTS := <-s.sendQueueTS
+		log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
+
+		//var msgvec *([3]C.struct_mmsghdr) = ([3]C.struct_mmsghdr)(&unsafe.Pointer(vmessages))
+		var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
+		var msghdr *C.struct_msghdr
+
+		//msghdr = &msgvec[updatedElemmsgvec].msg_hdr
+		for i := 0; i < 2; i++ {
+			msghdr = &msgvec[i].msg_hdr
+
+			msghdr.msg_namelen = C.uint(0)
+			//msghdr.msg_name is null
+
+			//theoretisch gibt es hier mehrere
+			//msghdr.msg_iov.iov_base = sendMsgTS.payload
+			log.Printf("&msgvec[%d].msg_hdr=%v", i, msghdr)
+			log.Printf("msghdr.msg_iov.iov_len=%v", msghdr.msg_iov.iov_len)
+			log.Printf("msghdr.msg_iov.iov_base=%v", msghdr.msg_iov.iov_base)
+
+			/*
+				add the ntp packet
+			*/
+			//msghdr.msg_iov.iov_base
+			var bufferPtr *[C.IOVLEN]C.char
+			bufferPtr = (*[C.IOVLEN]C.char)(msghdr.msg_iov.iov_base)
+			var offsetNTP int
+			var pktLen int
+			pktLen += len(sendMsgTS.payload) //should be 48
+			/* Jeweils bei Bufferals Prefix und bei (msgvec[i].msg_len + X)*/
+			//1. MACs => add 12
+			offsetNTP += 12
+			pktLen += 12
+			//2 NO VLAN TAGS
+
+			//3 Add IPv4 ethertype
+			bufferPtr[offsetNTP] = 0x08
+			bufferPtr[offsetNTP+1] = 0x00
+			offsetNTP += 2
+			pktLen += 2
+
+			//TODO Use SCION pkg somehome directly... Bytes....
+			//4 Add Destination address and port for IPv4 UDP headers
+			bufferPtr[offsetNTP] = 69
+			var ihl int
+			ihl = int((bufferPtr[offsetNTP] & 0xf) * 4) //==20 for ipv4
+
+			bufferPtr[offsetNTP+9] = 17
+			//ipv4 in network byte order
+			bufferPtr[offsetNTP+16] = 10
+			bufferPtr[offsetNTP+17] = 80
+			bufferPtr[offsetNTP+18] = 45
+			bufferPtr[offsetNTP+19] = -128
+			//port in network byte order
+			bufferPtr[offsetNTP+ihl+2] = 0   //shoud be [22]
+			bufferPtr[offsetNTP+ihl+3] = 123 //shoud be [23]
+
+			offsetNTP += ihl + 8 //should be 42
+			pktLen += ihl + 8    //should be 90
+
+			//copy ntp packet :-(
+			for a, b := range sendMsgTS.payload {
+
+				log.Printf("a=%v b=%v", a, b)
+				bufferPtr[a+offsetNTP] = C.char(b)
+			}
+			updatedElemmsgvec++
+
+			msgvec[i].msg_len = C.uint(pktLen)
+			log.Printf("msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
+
+			/*
+				Add Ancillary data
+			*/
+			//ADD TIMESTAMPS
+			var cmsg *C.struct_cmsghdr
+			cmsg = cmsgFirstHdr(msghdr)
+			cmsg.cmsg_len = 64                  //unsigned long 8bytes
+			cmsg.cmsg_level = C.SOL_SOCKET      //int 4bytes
+			cmsg.cmsg_type = C.SCM_TIMESTAMPING //int 4bytes
+
+			var cmsgDataPtr *C.uchar
+			cmsgDataPtr = cmsgData(cmsg)
+
+			//ACHTUNG: Kopiere hier Kernel und HW rein... unklar ob Chrony logik damit klarkommt
+			//====> nein verwirft dann beide TS wenn HW "ungültig ist"
+			//habe sie beim erstellen entfernt
+			*(*C.struct_scm_timestamping)(unsafe.Pointer(cmsgDataPtr)) = sendMsgTS.ts3
+
+			log.Printf("cmsg.cmsg_len-TYPE = %T", cmsg.cmsg_len)
+			log.Printf("cmsg.cmsg_level-TYPE = %T", cmsg.cmsg_level)
+
+			//ADD IP_PKTINFO
+			cmsg = cmsgNextHdr(msghdr, cmsg)
+			cmsg.cmsg_len = 28
+			cmsg.cmsg_level = C.IPPROTO_IP
+			cmsg.cmsg_type = C.IP_PKTINFO
+			cmsgDataPtr = cmsgData(cmsg)
+
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = 2
+			var aaa C.struct_in_addr
+			var bbb C.struct_in_addr
+			//remove this c-call
+			aaa.s_addr = C.htonl(173026643) //10.80.45.83??
+			bbb.s_addr = C.htonl(173026688) //10.80.45.128??
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst = aaa
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr = bbb
+
+			/*
+				memcpy(&ipi, CMSG_DATA(cmsg), sizeof(ipi));
+				DEBUG_LOG("\t\t\t\t\tipi.ipi_ifindex=%d (Interface index)", ipi.ipi_ifindex);
+				DEBUG_LOG("\t\t\t\t\tipi.ipi_spec_dst.s_addr=%s (Local address.. wrong->? Routing destination address)", inet_ntoa(ipi.ipi_spec_dst));
+				DEBUG_LOG("\t\t\t\t\tipi.ipi_addr.s_addr=%s (Header destination address)", inet_ntoa(ipi.ipi_addr));
+			*/
+
+			//TODO Länge der Daten setzen..
+
+		}
+	}
+
+	return C.int(updatedElemmsgvec)
 
 }
 

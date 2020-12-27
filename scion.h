@@ -1,3 +1,12 @@
+#define SENDNTPPERIP 1
+
+#define MSGBUFFERSIZE 100
+
+#define GODEBUG 0
+
+#define VLEN 16
+#define IOVLEN 1140
+
 #include "config.h"
 #include "logging.h"
 #include "util.h"
@@ -8,7 +17,6 @@
 
 #include "socket.h"
 #include "addressing.h"
-
 
 #ifdef HAVE_LINUX_TIMESTAMPING
 #include <linux/errqueue.h>
@@ -50,7 +58,6 @@
 #include <arpa/inet.h>
 #include <sys/random.h>
 
-
 #ifndef _SCION_API_H
 #define _SCION_API_H
 #include "scion_api.h"
@@ -64,7 +71,8 @@
 /* Used for debuggin
    _IP_ <=> packets/structures in c-World
 */
-typedef enum{
+typedef enum
+{
    SCION_IP_TX_ERR_MSG,
    SCION_IP_TX_NTP_MSG,
    SCION_IP_RX_NTP_MSG,
@@ -106,7 +114,7 @@ typedef enum
 
 typedef struct fdInfo
 {
-   int fd; 
+   int fd;
    int domain;
    int type;
    int protocol;
@@ -115,24 +123,20 @@ typedef struct fdInfo
    char remoteAddress[MAXADDRESSLENGTH];
    char remoteAddressSCION[MAXADDRESSLENGTH];
    int level_optname_value[SCION_LE_LEN][SCION_OPTNAME_LEN]; //optval !=0 0==disabled
-   int createTxTimestamp;  // shortcut...
-   int createRxTimestamp;  //   ... compare SCION_setsockopt()
+   int createTxTimestamp;                                    // shortcut...
+   int createRxTimestamp;                                    //   ... compare SCION_setsockopt()
    //int optval[SCION_OPTNAME_LEN];
 } fdInfo;
-
 
 typedef struct addressMapping
 {
    char addressIP[MAXADDRESSLENGTH];
    char addressSCION[MAXADDRESSLENGTH];
-} addressMapping; 
-
+} addressMapping;
 
 void SCION_Initialise();
 
 void SCION_parse_source(char *line, char *type);
-
-
 
 /* Socket Operations */
 
@@ -160,8 +164,8 @@ extern int SCION_getsockopt(int __fd, int __level, int __optname,
 /* Give the socket FD the local address ADDR (which is LEN bytes long).  
    On success, zero is returned.  On error, -1 is returned, and errno is
        set appropriately.*/
-extern int SCION_bind (int __fd, struct sockaddr *__addr, socklen_t __len)
-     __THROW;   //__CONST_SOCKADDR_ARG
+extern int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
+    __THROW; //__CONST_SOCKADDR_ARG
 
 /* Open a connection on socket FD to peer at ADDR (which LEN bytes long).
    For connectionless socket types, just set the default address to send to
@@ -182,7 +186,6 @@ extern int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len,
    __THROW.  */
 extern ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message,
                              int __flags);
-
 
 /* Receive up to VLEN messages as described by VMESSAGES from socket FD. 
    Returns the number of messages received or -1 for errors.
@@ -206,15 +209,12 @@ extern int SCION_select(int __nfds, fd_set *__restrict __readfds,
                         fd_set *__restrict __exceptfds,
                         struct timeval *__restrict __timeout);
 
-
-
-
 /* some helpers */
 
 int SCION_extract_udp_data(unsigned char *msg, NTP_Remote_Address *remote_addr, int len);
 
-void printNTPPacket(void * ntpPacket, int len);
-
+void printNTPPacket(void *ntpPacket, int len);
 
 void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
+
 

@@ -82,60 +82,69 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 	log.Printf("Listening in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, localPort, addr.SvcNone)
 
 	for {
-		////////////////////////////////////////////////////// 1 recive ntp packet from chronyScion
+		log.Printf("////////////////////////////////////////////////////// Step 1: receive ntp packet from chronyScion")
 		var pkt snet.Packet
 		var ov net.UDPAddr
 		err := conn.ReadFrom(&pkt, &ov)
 		if err != nil {
-			log.Printf("Failed to read packet: %v\n", err)
+			log.Printf("\t---->Failed to read packet: %v\n", err)
 			continue
 		}
 		pld, ok := pkt.Payload.(snet.UDPPayload)
 		if !ok {
-			log.Printf("Failed to read packet payload\n")
+			log.Printf("\t---->Failed to read packet payload\n")
 			continue
 		}
 
 		payload := pld.Payload
-		fmt.Printf("Received payload: \"%v\"\n", payload)
+		fmt.Printf("\t---->Received payload: \"%v\"\n", payload)
 
 		payloadLen := len(payload)
 		ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
 
 		//adhoc security.... improve this
 		if payloadLen < ntpSize {
-			fmt.Printf("payload can't be a NTP packet (%d < %d)\n", payloadLen, ntpSize)
+			fmt.Printf("\t---->payload can't be a NTP packet (%d < %d)\n", payloadLen, ntpSize)
 			continue
 		}
 
-		//data leakage?
-		ntp := *(*NTP_Packet)(C.CBytes(payload))
-		fmt.Printf("ntp = %v\n", ntp)
+		//data leakage? jop
+		// Go []byte slice to C array
+		// The C array is allocated in the C heap using malloc.
+		// It is the caller's responsibility to arrange for it to be
+		// freed, such as by calling C.free (be sure to include stdlib.h
+		// if C.free is needed).
+		ntpHeap := C.CBytes(payload)
+		ntp := *(*NTP_Packet)(ntpHeap)
+		fmt.Printf("\t---->ntp = %v\n", ntp)
+		C.free(ntpHeap)
 
-		////////////////////////////////////////////////////// 2 forward ntp packet as common UDP packet
+		log.Printf("////////////////////////////////////////////////////// Step 2: forward ntp packet as common UDP packet to ntp server")
 		connUDP, err := net.Dial("udp", "10.80.45.128:123")
 
 		defer connUDP.Close()
 		n, err := connUDP.Write(payload)
-		fmt.Printf("n=%v bytes send using common udp connection\n", n)
+		fmt.Printf("\t---->n=%v bytes sent using common udp connection\n", n)
 
-		////////////////////////////////////////////////////// 3 receive ntp packet respons as common UDP packet
+		log.Printf("////////////////////////////////////////////////////// Step 3: receive ntp packet response as common UDP packet")
 		var buf [512]byte
 		n, err = connUDP.Read(buf[0:])
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("n=%v bytes received using common udp connection\n", n)
+		fmt.Printf("\t---->n=%v bytes received using common udp connection\n", n)
 		//adhoc security.... improve this
 		if n < ntpSize {
-			fmt.Printf("payload can't be a NTP packet (%d < %d)\n", n, ntpSize)
+			fmt.Printf("\t---->payload can't be a NTP packet (%d < %d)\n", n, ntpSize)
 			continue
 		}
-		//data leakage?
-		ntp = *(*NTP_Packet)(C.CBytes(buf[0:n]))
-		fmt.Printf("ntp = %v\n", ntp)
+		//data leakage? JOP
+		ntpHeap = C.CBytes(buf[0:n])
+		ntp = *(*NTP_Packet)(ntpHeap)
+		fmt.Printf("\t---->ntp = %v\n", ntp)
+		C.free(ntpHeap)
 
-		////////////////////////////////////////////////////// 4 forward received ntp packet to chrony over SCION
+		log.Printf("////////////////////////////////////////////////////// Step 4: forward received ntp packet to chrony over SCION")
 
 		/* get reverse path */
 		reversePath := pkt.Path.Copy()
@@ -162,12 +171,12 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 			},
 		}
 
-		log.Printf("Sending in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, localPort, addr.SvcNone)
-		log.Printf("........Destination:  IP:Port ist in %v on %v:%d - %v\n", pkt.Source.IA, pkt.Source.Host.IP(), pld.SrcPort, addr.SvcNone)
+		log.Printf("\t---->Sending in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, localPort, addr.SvcNone)
+		log.Printf(".\t---->.......Destination:  IP:Port ist in %v on %v:%d - %v\n", pkt.Source.IA, pkt.Source.Host.IP(), pld.SrcPort, addr.SvcNone)
 
 		err = conn.WriteTo(pktResponse, reversePathUnderlayNextHop) //sp.UnderlayNextHop())
 		if err != nil {
-			log.Printf("[%d] Failed to write packet: %v\n", err)
+			log.Printf("\t---->[%d] Failed to write packet: %v\n", err)
 		}
 
 	}

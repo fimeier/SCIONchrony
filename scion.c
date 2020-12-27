@@ -314,6 +314,7 @@ int SCION_socket(int __domain, int __type, int __protocol)
 
 /*
 TODO TX/RX detection has to be generic...
+        Decide what really is needed and how the communication with go shoud work
 */
 int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval, socklen_t __optlen)
 {
@@ -422,6 +423,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         fdi->level_optname_value[scion_level][scion_optname] = *((int *)__optval);
         fdi->createTxTimestamp = createTxTimestamp;
         fdi->createRxTimestamp = createRxTimestamp;
+        SCIONgosetsockopt(__fd);
     }
     if (result < 0)
     {
@@ -494,7 +496,13 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
         }
     }
 
-    return connect(__fd, __addr, __len);
+    if (SENDNTPPERIP)
+    {
+        SCIONgoconnect(__fd);
+        return connect(__fd, __addr, __len);
+    }
+    return SCIONgoconnect(__fd);
+    //return connect(__fd, __addr, __len); //probably not needed
 }
 
 ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
@@ -520,7 +528,8 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
 
         //TODO remove sendmsg()
         DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-        status = sendmsg(__fd, __message, __flags);
+        if (SENDNTPPERIP)
+            status = sendmsg(__fd, __message, __flags);
 
         return status;
     }
@@ -665,7 +674,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
         for (cmsg = CMSG_FIRSTHDR(msg_hdr); cmsg; cmsg = CMSG_NXTHDR(msg_hdr, cmsg))
         {
             int processed = 0;
-            DEBUG_LOG("\t\t\t\tProcessing *cmsghdr@%p\tcmsg->cmsg_level=%d\tcmsg->cmsg_type=%d", cmsg, cmsg->cmsg_level, cmsg->cmsg_type);
+            DEBUG_LOG("\t\t\t\tProcessing *cmsghdr@%p\tcmsg->cmsg_len=%lu\tcmsg->cmsg_level=%d\tcmsg->cmsg_type=%d", cmsg, cmsg->cmsg_len, cmsg->cmsg_level, cmsg->cmsg_type);
 #ifdef HAVE_IN_PKTINFO
             if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_PKTINFO)
             {
@@ -858,12 +867,16 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         ZB entscheide ob als nächstes GO Augerufen wird... ob zB. receiveFlag oder __flags weitergegeben werden soll
         */
 
+        //For the case RX NTP implement the case here and call the printMMSGHDR() function to check it
+
         n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over SCION connection", n);
 
+        printMMSGHDR(__vmessages, n, scion_type);
+
         //TODO remove recvmmsg()
         DEBUG_LOG("TODO remove recvmmsg()!!!!");
-        n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+        //n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
     }
     //Chronyd acts as the NTP Server

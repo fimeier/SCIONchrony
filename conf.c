@@ -766,7 +766,7 @@ parse_null(char *line)
   return 1;
 }
 
-/* ================================================== */
+/* ==================================================  */
 
 static void
 parse_source(char *line, char *type, int fatal)
