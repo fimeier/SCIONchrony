@@ -88,6 +88,10 @@ type rcvMsgNTPTS struct {
 	pkt snet.Packet
 	ov  net.UDPAddr
 }
+
+/* Remark: ts3 have to be separated (if HW-TS isn't accepted, chrony's logic drops packets without considering Kernel TS in it)
+Further: There are two messages needed for a correct message count in select (C-Library createse two separate messages: TS creation for Kernel/HW takes different amount of time)
+*/
 type sendMsgTS struct {
 	tsType  int
 	payload []byte
@@ -145,12 +149,10 @@ func init() {
 
 	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.LUTC)
 
-	/*if C.DEBUG == 0 {
-		log.Printf("(Init) log.* Output has been disabled as #define DEBUG 0 is set")
-		log.SetOutput(ioutil.Discard)
-	}*/
-	if C.GODEBUG == 0 {
-		log.Printf("(Init) log.* Output has been disabled as #define GODEBUG 0 is set")
+	//bug in C.GODEBUG???... can't activate it anymore... always existing and zero..
+	//if C.GODEBUG == 0 {
+	if C.GODEBUGNEW == 0 {
+		log.Printf("(Init) log.* Output has been disabled as #define GODEBUGNEW 0 is set")
 		log.SetOutput(ioutil.Discard)
 	}
 	log.Printf("(Init) ....logging behaviour has been changed")
@@ -298,27 +300,27 @@ func (s *FDSTATUS) rcvLogic() {
 
 		//Memory Model, sync?
 
-		log.Printf("(rcvLogic fd=%v) Receive ntp packet from chronyScion", s.Fd)
+		//log.Printf("(rcvLogic fd=%v) Receive ntp packet from chronyScion", s.Fd)
 		//log.Printf("")
 		var pkt snet.Packet
 		var ov net.UDPAddr
 		second := time.Now().Add(time.Second)
 		s.conn.SetReadDeadline(second)
-		log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
+		//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
 		err := s.conn.ReadFrom(&pkt, &ov)
-		log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
+		//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
 		if err != nil {
-			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
 			continue
 		}
 		pld, ok := pkt.Payload.(snet.UDPPayload)
 		if !ok {
-			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet payload", s.Fd)
+			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet payload", s.Fd)
 			continue
 		}
 
 		payload := pld.Payload
-		log.Printf("(rcvLogic fd=%v) \t---->Received payload: \"%v\"\n", s.Fd, payload)
+		//log.Printf("(rcvLogic fd=%v) \t---->Received payload: \"%v\"\n", s.Fd, payload)
 
 		payloadLen := len(payload)
 		ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
@@ -350,6 +352,8 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 	*/
 	s.createTxTimestamp = int(s.Sinfo.createTxTimestamp) == 1
 	s.createRxTimestamp = int(s.Sinfo.createRxTimestamp) == 1
+	s.txKERNELts = s.createTxTimestamp
+	//s.txHWts = s.createTxTimestamp //change this logic
 
 	fdstatus[fd] = s //store it back
 
@@ -427,24 +431,130 @@ func SCIONgoclose(_fd C.int) C.int {
 	return C.int(0)
 }
 
+type fdsetType syscall.FdSet
+
+// copyright https://golang.hotexamples.com/de/site/file?hash=0x5e82324c621245310a74ced33fa9cd3627abb2d8c84e55d16acb46c1de2ba57f&fullName=linuxdvb/filter.go&project=ziutek/dvb
+
+func (s *fdsetType) Set(fd uintptr) {
+	bits := 8 * unsafe.Sizeof(s.Bits[0])
+	if fd >= bits*uintptr(len(s.Bits)) {
+		panic("fdset: fd out of range")
+	}
+	n := fd / bits
+	m := fd % bits
+	s.Bits[n] |= 1 << m
+}
+func (s *fdsetType) Clr(fd uintptr) {
+	bits := 8 * unsafe.Sizeof(s.Bits[0])
+	if fd >= bits*uintptr(len(s.Bits)) {
+		panic("fdset: fd out of range")
+	}
+	n := fd / bits
+	m := fd % bits
+	s.Bits[n] &^= 1 << m
+}
+func (s *fdsetType) IsSet(fd uintptr) bool {
+	bits := 8 * unsafe.Sizeof(s.Bits[0])
+	if fd >= bits*uintptr(len(s.Bits)) {
+		panic("fdset: fd out of range")
+	}
+	n := fd / bits
+	m := fd % bits
+	return s.Bits[n]&(1<<m) != 0
+}
+
 //export SCIONselect
 func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds C.fdsetPtr, timeout C.timevalPtr) C.int {
+	highestFd := int(nfds) - 1
 
-	//emulate select
-	fmt.Printf("Before calling select: readfds=%v\n", readfds)
-	n, err := syscall.Select(int(nfds),
-		(*syscall.FdSet)(unsafe.Pointer(readfds)),
-		(*syscall.FdSet)(unsafe.Pointer(writefds)),
-		(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
-		(*syscall.Timeval)(unsafe.Pointer(timeout)))
+	numOfBitsSet := 0
 
-	fmt.Printf("After calling select: readfds=%v\n", readfds)
+	//TODO: DO something with the timeout
+	//at the moment it directly returns
 
-	if err == nil {
-		return C.int(n)
+	//(*syscall.FdZero)(unsafe.Pointer(writefds))
+
+	var rset *fdsetType
+	if readfds != nil {
+		rset = (*fdsetType)(unsafe.Pointer(readfds))
 	}
 
-	return C.int(-1) //Todo err to errno?
+	var eset *fdsetType
+	if exceptfds != nil {
+		eset = (*fdsetType)(unsafe.Pointer(exceptfds))
+	}
+
+	var wset *fdsetType
+	if writefds != nil {
+		wset = (*fdsetType)(unsafe.Pointer(writefds))
+	}
+
+	for fd := 1; fd <= highestFd; fd++ {
+		s, exists := fdstatus[fd]
+		if !exists {
+			continue
+		}
+		nMsg := len(s.rcvQueueNTPTS)
+		nErrorMsg := len(s.sendQueueTS)
+
+		var fdPtr uintptr
+		fdPtr = uintptr(fd)
+
+		log.Printf("(SCIONselect) fd=%v: nMsg=%v nErrorMsg=%v", fd, nMsg, nErrorMsg)
+
+		rIsSet := rset.IsSet(fdPtr)
+		if readfds != nil && rIsSet {
+			if nMsg > 0 {
+				log.Printf("(SCIONselect) fd=%v has nMsg=%v ready\n", fd, nMsg)
+				numOfBitsSet++
+			} else {
+				log.Printf("(SCIONselect) readfds=%v rIsSet=%v\n", readfds, rIsSet)
+				rset.Clr(fdPtr)
+				rIsSet = rset.IsSet(fdPtr)
+				log.Printf("(SCIONselect) now it should be cleared: readfds=%v rIsSet=%v\n", readfds, rIsSet)
+			}
+		}
+
+		eIsSet := eset.IsSet(fdPtr)
+		if exceptfds != nil && eIsSet {
+			if nErrorMsg > 0 {
+				log.Printf("(SCIONselect) fd=%v has nErrorMsg=%v ready\n", fd, nErrorMsg)
+				numOfBitsSet++
+			} else {
+				log.Printf("(SCIONselect) exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
+				eset.Clr(fdPtr)
+				eIsSet = eset.IsSet(fdPtr)
+				log.Printf("(SCIONselect) now it should be cleared: exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
+			}
+		}
+
+		//always clean them.... at the moment there is no write queue... or is there one?
+		if writefds != nil {
+			wset.Clr(fdPtr)
+		}
+
+	}
+
+	/*
+		//emulate select
+		fmt.Printf("Before calling select: readfds=%v\n", readfds)
+		n, err := syscall.Select(int(nfds),
+			(*syscall.FdSet)(unsafe.Pointer(readfds)),
+			(*syscall.FdSet)(unsafe.Pointer(writefds)),
+			(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
+			(*syscall.Timeval)(unsafe.Pointer(timeout)))
+
+		fmt.Printf("After calling select: readfds=%v\n", readfds)
+	*/
+
+	/*
+		state, ok := fdstatus[fd]
+
+		if err == nil {
+			return C.int(n)
+		}
+	*/
+	return C.int(numOfBitsSet) //Todo err to errno?
 }
 
 //export SCIONgosendmsg
@@ -478,12 +588,10 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t 
 	log.Printf("(SCIONgosendmsg)  \t|---->  createTxTimestamp local=%v c-world=%v", fdstatus[fd].createTxTimestamp, fdstatus[fd].Sinfo.createTxTimestamp)
 	log.Printf("(SCIONgosendmsg)  \t|---->  createRxTimestamp local=%v c-world=%v", fdstatus[fd].createRxTimestamp, fdstatus[fd].Sinfo.createRxTimestamp)
 
-	//TODO NONBLOCKING == start go routine... return value????
-	//Assuming
 	s := fdstatus[fd]
 	go s.sendmsgOverScion(msg.Iov)
 
-	//return C.ssize_t(<-fdstatus[fd].sent)
+	//if the call is blocking, this channel will get the value after msg has been sent
 	bytesSent := <-s.sent
 	return C.ssize_t(bytesSent)
 
@@ -555,14 +663,16 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
 	}
 
 	//ALWAYS create TX timestamp..--- change this
-	fakeKernelSentTime := time.Now() //HW time komplett anders
-	//fakeHardwareSentTime := time.Now() //HW time komplett anders
+	fakeKernelSentTime := time.Now()   //HW time komplett anders
+	fakeHardwareSentTime := time.Now() //HW time komplett anders
 	err = conn.WriteTo(pkt, remoteAddr.NextHop)
 	if err != nil {
 		log.Printf("(sendmsgOverScion) [%d] Failed to write packet: %v\n", err)
 		s.sent <- int(-1)
 		return
 	}
+
+	//if there is a blocking call, it will return now
 	if !nonblocking {
 		s.sent <- int(iovecLen)
 	}
@@ -576,27 +686,33 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
 	msgTS.sentTo = remoteAddr
 
 	//add TS's: Src needs to be adpted afte SCION provides the correct TS's
-	if s.createTxTimestamp {
+	if s.txKERNELts {
 		sendMsg = true
 		var ts3 C.struct_scm_timestamping
 		//kernel ts
 		ts3.ts[0].tv_sec = C.long(fakeKernelSentTime.Unix())
 		ts3.ts[0].tv_nsec = C.long(fakeKernelSentTime.UnixNano() - fakeKernelSentTime.Unix()*1e9)
-		//hardware ts
-		ts3.ts[2].tv_sec = C.long(0)  //C.long(fakeHardwareSentTime.Unix())
-		ts3.ts[2].tv_nsec = C.long(0) //C.long(fakeHardwareSentTime.UnixNano() - fakeHardwareSentTime.Unix()*1e9)
-		log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3=%v", s.Fd, ts3)
+		log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(Kernel)=%v", s.Fd, ts3)
 		msgTS.ts3 = ts3
-	}
-
-	if sendMsg {
 		log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
 		s.sendQueueTS <- msgTS
-	} else {
+	}
+	if s.txHWts {
+		sendMsg = true
+		var ts3 C.struct_scm_timestamping
+		//hardware ts
+		ts3.ts[2].tv_sec = C.long(fakeHardwareSentTime.Unix())
+		ts3.ts[2].tv_nsec = C.long(fakeHardwareSentTime.UnixNano() - fakeHardwareSentTime.Unix()*1e9)
+		log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(HW)=%v", s.Fd, ts3)
+		msgTS.ts3 = ts3
+		log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
+		s.sendQueueTS <- msgTS
+	}
+
+	if !sendMsg {
 		log.Printf("(sendmsgOverScion fd=%v) Will not create any messages for Timestamps.", s.Fd)
 	}
 	log.Printf("(sendmsgOverScion) \t----->Done")
-
 }
 
 // SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff
@@ -640,29 +756,23 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 	log.Printf("(SCIONgorecvmmsg) ----> receiveNTP?  %v", receiveNTP)
 	log.Printf("(SCIONgorecvmmsg) ----> dataEncapLayer2?  %v", dataEncapLayer2)
 
-	n := len(s.rcvQueueNTPTS)
-	log.Printf("(SCIONgorecvmmsg) ----> number of received messages on fd=%v is %v", fd, n)
-	nError := len(s.sendQueueTS)
-	log.Printf("(SCIONgorecvmmsg) ----> number of received ERROR-messages on fd=%v is %v", fd, nError)
-	/*if nError > 0 {
-		sendMsgTS := <-s.sendQueueTS
-		log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
-	}*/
+	nMsg := len(s.rcvQueueNTPTS)
+	log.Printf("(SCIONgorecvmmsg) ----> number of received messages on fd=%v is %v", fd, nMsg)
+	nErrorMsg := len(s.sendQueueTS)
+	log.Printf("(SCIONgorecvmmsg) ----> number of received ERROR-messages on fd=%v is %v", fd, nErrorMsg)
 
 	//TODO VLEN check
-
 	updatedElemmsgvec := 0
-	if returnTxTS && nError > 0 {
+	if returnTxTS && nErrorMsg > 0 {
+		//TODO Länge der Daten setzen..
+		for i := 0; i < nErrorMsg && i < int(vlen); i++ {
+			sendMsgTS := <-s.sendQueueTS
+			log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
 
-		sendMsgTS := <-s.sendQueueTS
-		log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
+			//TODO C.VLEN should be variable i.e. equal to vlen
+			var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
+			var msghdr *C.struct_msghdr
 
-		//var msgvec *([3]C.struct_mmsghdr) = ([3]C.struct_mmsghdr)(&unsafe.Pointer(vmessages))
-		var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
-		var msghdr *C.struct_msghdr
-
-		//msghdr = &msgvec[updatedElemmsgvec].msg_hdr
-		for i := 0; i < 2; i++ {
 			msghdr = &msgvec[i].msg_hdr
 
 			msghdr.msg_namelen = C.uint(0)
@@ -720,7 +830,6 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 				log.Printf("a=%v b=%v", a, b)
 				bufferPtr[a+offsetNTP] = C.char(b)
 			}
-			updatedElemmsgvec++
 
 			msgvec[i].msg_len = C.uint(pktLen)
 			log.Printf("msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
@@ -769,13 +878,18 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 				DEBUG_LOG("\t\t\t\t\tipi.ipi_addr.s_addr=%s (Header destination address)", inet_ntoa(ipi.ipi_addr));
 			*/
 
-			//TODO Länge der Daten setzen..
-
+			updatedElemmsgvec++
 		}
+		return C.int(updatedElemmsgvec)
 	}
 
-	return C.int(updatedElemmsgvec)
+	if receiveNTP && nMsg > 0 {
+		log.Printf("(SCIONgorecvmmsg) Receive NTP packet needs to be implemented!!!!!!!!!!!!!!!!")
+		return C.int(updatedElemmsgvec)
+	}
 
+	log.Printf("(SCIONgorecvmmsg) Unimplemented/unknown case... returning no messages!!!!!!")
+	return C.int(updatedElemmsgvec)
 }
 
 /* eigentlich nur ein "cast" */

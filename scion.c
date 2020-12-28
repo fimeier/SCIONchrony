@@ -2,7 +2,7 @@
 
 //static int socked_mapping[1024];
 
-//TODO CHange is if still needed
+//TODO CHange is if still needed: vermutlich nicht mehr nötig (vgl nfds bei select)
 static unsigned int highest_fd = 0;
 
 static fdInfo *fdInfos[1024];
@@ -902,16 +902,22 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
     return n;
 }
 
-/*Returns the number of ready descriptors, or -1 for errors.*/
+/*Returns the number of ready descriptors, or -1 for errors.
+nfds   This argument should be set to the highest-numbered file
+        descriptor in any of the three sets, plus 1.  The
+        indicated file descriptors in each set are checked, up to this limit
+              */
 int SCION_select(int __nfds, fd_set *__restrict __readfds,
-                 fd_set *__restrict __writefds,
+                 fd_set *__restrict __writefds, 
                  fd_set *__restrict __exceptfds,
                  struct timeval *__restrict __timeout)
 {
 
     DEBUG_LOG("SCION_select(...) called....");
+    //int n = SCIONselect(__nfds, __readfds, __writefds, __exceptfds, __timeout);
     int n = SCIONselect(__nfds, __readfds, __writefds, __exceptfds, __timeout);
     DEBUG_LOG("SCION_select(...) found %d ready fd's", n);
+
 
     //Debug stuff
     int readyFDs = n;
