@@ -18,6 +18,14 @@ package main
 // {
 //     return CMSG_NXTHDR(msg_hdr,cmsg);
 // }
+// size_t cmsgLen(size_t len)
+// {
+//     return CMSG_LEN(len);
+// }
+// size_t cmsgSpace(size_t len)
+// {
+//     return CMSG_SPACE(len);
+// }
 import "C"
 
 //I do not use this
@@ -33,4 +41,12 @@ func cmsgData(cmsg *C.struct_cmsghdr) *C.uchar {
 
 func cmsgNextHdr(msghdr *C.struct_msghdr, cmsg *C.struct_cmsghdr) *C.struct_cmsghdr {
 	return C.cmsgNextHdr(msghdr, cmsg)
+}
+
+func cmsgLen(len C.size_t) C.size_t {
+	return C.cmsgLen(len)
+}
+
+func cmsgSpace(len C.size_t) C.size_t {
+	return C.cmsgSpace(len)
 }

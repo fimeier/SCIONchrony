@@ -80,6 +80,7 @@
             "request": "launch",
             "program": "${fileDirname}/chronyd",
             //ACHTUNG: "-d -d"<==> When chronyd was compiled with debugging support, this option can be used twice to print also debugging messages.
+            //sudo ./chronyd -P 0 -4 -d -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf
             "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf"],
 
             "stopAtEntry": false,

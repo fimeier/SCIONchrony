@@ -21,6 +21,7 @@ package main
 import "C"
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -48,11 +49,14 @@ import (
 ---> work with fdstatus[fd] or its copy....
 ---> non blocking send: Buffer wie lange muss dieser bestehen bleiben (mal rein für C)
 -----------> Chrony überschreibt ihn im allgemeinen ja erst wenn eine nachricht empfangen wird für diesesn Socket
+--->SCIONselect: busy-wait loop....... überlege ob chrony timeouts relevant sind für Logik...
 */
 
 /*
 go build -buildmode=c-shared -o scion_api.so *.go
 */
+
+const pktLengtLayer2 = 90
 
 //FDSTATUS contains EVERYTHING
 type FDSTATUS struct {
@@ -81,22 +85,26 @@ type FDSTATUS struct {
 	txKERNELts         bool //use this
 	txHWts             bool //use this
 	createRxTimestamp  bool //TODO Adapt logig for recv (started after connect, but before setsockopts..)
-
+	rxKERNELts         bool //use this
+	rxHWts             bool //use this
 }
 
 type rcvMsgNTPTS struct {
-	pkt snet.Packet
-	ov  net.UDPAddr
+	tsType int         //TS type.... not needed?
+	pkt    snet.Packet //call like this should never fail (is checked befor added): rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+	ov     net.UDPAddr
+	ts3    C.struct_scm_timestamping
 }
 
 /* Remark: ts3 have to be separated (if HW-TS isn't accepted, chrony's logic drops packets without considering Kernel TS in it)
 Further: There are two messages needed for a correct message count in select (C-Library createse two separate messages: TS creation for Kernel/HW takes different amount of time)
 */
 type sendMsgTS struct {
-	tsType  int
-	payload []byte
-	ts3     C.struct_scm_timestamping
-	sentTo  *snet.UDPAddr
+	tsType int //TS type.... not needed?
+	pkt    *snet.Packet
+	//payload []byte
+	ts3    C.struct_scm_timestamping
+	sentTo *snet.UDPAddr
 }
 
 const (
@@ -298,42 +306,49 @@ func (s *FDSTATUS) rcvLogic() {
 			return
 		}
 
-		//Memory Model, sync?
+		var rcvMsgNTPTS rcvMsgNTPTS
 
-		//log.Printf("(rcvLogic fd=%v) Receive ntp packet from chronyScion", s.Fd)
-		//log.Printf("")
-		var pkt snet.Packet
-		var ov net.UDPAddr
+		//var pkt snet.Packet
+		//var ov net.UDPAddr
 		second := time.Now().Add(time.Second)
 		s.conn.SetReadDeadline(second)
 		//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
-		err := s.conn.ReadFrom(&pkt, &ov)
+		err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
 		//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
 		if err != nil {
 			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
 			continue
 		}
-		pld, ok := pkt.Payload.(snet.UDPPayload)
+		fakeHardwareRxTime := time.Now() //HW time komplett anders
+		fakeKernelRxTime := time.Now()   //HW time komplett anders
+
+		//var ts3 C.struct_scm_timestamping
+
+		if s.rxKERNELts {
+			rcvMsgNTPTS.tsType = tskernel
+			//kernel ts
+			rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(fakeKernelRxTime.Unix())
+			rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(fakeKernelRxTime.UnixNano() - fakeKernelRxTime.Unix()*1e9)
+		}
+
+		if s.rxHWts {
+			rcvMsgNTPTS.tsType = tshardware
+			if s.rxKERNELts {
+				rcvMsgNTPTS.tsType = tskernelhardware
+			}
+			//kernel ts
+			rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(fakeHardwareRxTime.Unix())
+			rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(fakeHardwareRxTime.UnixNano() - fakeHardwareRxTime.Unix()*1e9)
+		}
+
+		//Needed? If the payload can be extracted there should be a message
+		_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
 		if !ok {
-			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet payload", s.Fd)
 			continue
 		}
 
-		payload := pld.Payload
-		//log.Printf("(rcvLogic fd=%v) \t---->Received payload: \"%v\"\n", s.Fd, payload)
-
-		payloadLen := len(payload)
-		ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
-
-		//adhoc security.... improve this
-		if payloadLen < ntpSize {
-			fmt.Printf("(rcvLogic fd=%v) \t---->payload can't be a NTP packet (%d < %d) (IGNORING THIS...\n", payloadLen, ntpSize)
-			//continue
-		}
-
 		/* the only thing really important comes here.. */
-		msg := rcvMsgNTPTS{pkt, ov}
-		s.rcvQueueNTPTS <- msg
+		s.rcvQueueNTPTS <- rcvMsgNTPTS
 	}
 
 }
@@ -354,6 +369,8 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 	s.createRxTimestamp = int(s.Sinfo.createRxTimestamp) == 1
 	s.txKERNELts = s.createTxTimestamp
 	//s.txHWts = s.createTxTimestamp //change this logic
+	s.rxKERNELts = s.createRxTimestamp
+	//s.rxHWts = s.createRxTimestamp //change this logic
 
 	fdstatus[fd] = s //store it back
 
@@ -472,6 +489,24 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 	//TODO: DO something with the timeout
 	//at the moment it directly returns
 
+	var tvsec C.__time_t
+	var tvusec C.__suseconds_t
+	var blocking bool
+	var t time.Duration
+	var ticker <-chan time.Time
+	if timeout == nil {
+		log.Printf("timeout seems to be NULL => select() will block indefinitely")
+		blocking = true
+		ticker = time.Tick(500 * time.Millisecond)
+	} else {
+		tvsec = timeout.tv_sec
+		tvusec = timeout.tv_usec
+		t = time.Duration(tvsec)*time.Second + time.Duration(tvusec)*time.Microsecond
+		ticker = time.Tick(t / 100)
+	}
+
+	log.Printf("blocking=%v tvsec=%v  tvusec=%v t=%v highestFd=%v", blocking, tvsec, tvusec, t, highestFd)
+
 	//(*syscall.FdZero)(unsafe.Pointer(writefds))
 
 	var rset *fdsetType
@@ -489,50 +524,61 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		wset = (*fdsetType)(unsafe.Pointer(writefds))
 	}
 
-	for fd := 1; fd <= highestFd; fd++ {
-		s, exists := fdstatus[fd]
-		if !exists {
-			continue
-		}
-		nMsg := len(s.rcvQueueNTPTS)
-		nErrorMsg := len(s.sendQueueTS)
-
-		var fdPtr uintptr
-		fdPtr = uintptr(fd)
-
-		log.Printf("(SCIONselect) fd=%v: nMsg=%v nErrorMsg=%v", fd, nMsg, nErrorMsg)
-
-		rIsSet := rset.IsSet(fdPtr)
-		if readfds != nil && rIsSet {
-			if nMsg > 0 {
-				log.Printf("(SCIONselect) fd=%v has nMsg=%v ready\n", fd, nMsg)
-				numOfBitsSet++
-			} else {
-				log.Printf("(SCIONselect) readfds=%v rIsSet=%v\n", readfds, rIsSet)
-				rset.Clr(fdPtr)
-				rIsSet = rset.IsSet(fdPtr)
-				log.Printf("(SCIONselect) now it should be cleared: readfds=%v rIsSet=%v\n", readfds, rIsSet)
+	for start := time.Now(); numOfBitsSet == 0 && (time.Since(start) < t || blocking); {
+		for fd := 1; fd <= highestFd; fd++ {
+			s, exists := fdstatus[fd]
+			if !exists {
+				continue
 			}
-		}
+			nMsg := len(s.rcvQueueNTPTS)
+			nErrorMsg := len(s.sendQueueTS)
 
-		eIsSet := eset.IsSet(fdPtr)
-		if exceptfds != nil && eIsSet {
-			if nErrorMsg > 0 {
-				log.Printf("(SCIONselect) fd=%v has nErrorMsg=%v ready\n", fd, nErrorMsg)
-				numOfBitsSet++
-			} else {
-				log.Printf("(SCIONselect) exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
-				eset.Clr(fdPtr)
-				eIsSet = eset.IsSet(fdPtr)
-				log.Printf("(SCIONselect) now it should be cleared: exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
+			var fdPtr uintptr
+			fdPtr = uintptr(fd)
+
+			//log.Printf("(SCIONselect) fd=%v: nMsg=%v nErrorMsg=%v", fd, nMsg, nErrorMsg)
+
+			rIsSet := rset.IsSet(fdPtr)
+			if readfds != nil && rIsSet {
+				if nMsg > 0 {
+					log.Printf("(SCIONselect) fd=%v has nMsg=%v ready\n", fd, nMsg)
+					numOfBitsSet++
+				} else {
+					//log.Printf("(SCIONselect) readfds=%v rIsSet=%v\n", readfds, rIsSet)
+					rset.Clr(fdPtr)
+					rIsSet = rset.IsSet(fdPtr)
+					//log.Printf("(SCIONselect) now it should be cleared: readfds=%v rIsSet=%v\n", readfds, rIsSet)
+				}
 			}
-		}
 
-		//always clean them.... at the moment there is no write queue... or is there one?
-		if writefds != nil {
-			wset.Clr(fdPtr)
-		}
+			eIsSet := eset.IsSet(fdPtr)
+			if exceptfds != nil && eIsSet {
+				if nErrorMsg > 0 {
+					log.Printf("(SCIONselect) fd=%v has nErrorMsg=%v ready\n", fd, nErrorMsg)
+					numOfBitsSet++
+				} else {
+					//log.Printf("(SCIONselect) exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
+					eset.Clr(fdPtr)
+					eIsSet = eset.IsSet(fdPtr)
+					//log.Printf("(SCIONselect) now it should be cleared: exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
+				}
+			}
 
+			//always clean them.... at the moment there is no write queue... or is there one?
+			if writefds != nil {
+				wset.Clr(fdPtr)
+			}
+
+			<-ticker
+			//log.Printf("(SCIONselect) received a tick.... starting over")
+
+		}
+	}
+
+	if numOfBitsSet > 0 {
+		log.Printf("(SCIONselect) Returning because numOfBitsSet=%v", numOfBitsSet)
+	} else {
+		log.Printf("(SCIONselect) Returning because of a timeout")
 	}
 
 	/*
@@ -681,12 +727,13 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
 	var msgTS sendMsgTS
 
 	sendMsg = true
-	msgTS.tsType = tskernelhardware
-	msgTS.payload = payload
+	msgTS.pkt = pkt
+	//msgTS.payload = payload
 	msgTS.sentTo = remoteAddr
 
 	//add TS's: Src needs to be adpted afte SCION provides the correct TS's
 	if s.txKERNELts {
+		msgTS.tsType = tskernel //not needed
 		sendMsg = true
 		var ts3 C.struct_scm_timestamping
 		//kernel ts
@@ -698,6 +745,7 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
 		s.sendQueueTS <- msgTS
 	}
 	if s.txHWts {
+		msgTS.tsType = tshardware //not needed
 		sendMsg = true
 		var ts3 C.struct_scm_timestamping
 		//hardware ts
@@ -762,18 +810,20 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 	log.Printf("(SCIONgorecvmmsg) ----> number of received ERROR-messages on fd=%v is %v", fd, nErrorMsg)
 
 	//TODO VLEN check
+	//PORT IP,....
 	updatedElemmsgvec := 0
 	if returnTxTS && nErrorMsg > 0 {
 		//TODO Länge der Daten setzen..
 		for i := 0; i < nErrorMsg && i < int(vlen); i++ {
 			sendMsgTS := <-s.sendQueueTS
+			payloadMsg := sendMsgTS.pkt.Payload.(snet.UDPPayload).Payload
 			log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
 
 			//TODO C.VLEN should be variable i.e. equal to vlen
 			var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
 			var msghdr *C.struct_msghdr
-
 			msghdr = &msgvec[i].msg_hdr
+			var msgControllen C.size_t
 
 			msghdr.msg_namelen = C.uint(0)
 			//msghdr.msg_name is null
@@ -792,7 +842,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			bufferPtr = (*[C.IOVLEN]C.char)(msghdr.msg_iov.iov_base)
 			var offsetNTP int
 			var pktLen int
-			pktLen += len(sendMsgTS.payload) //should be 48
+			pktLen += len(payloadMsg) //should be 48
 			/* Jeweils bei Bufferals Prefix und bei (msgvec[i].msg_len + X)*/
 			//1. MACs => add 12
 			offsetNTP += 12
@@ -825,9 +875,8 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			pktLen += ihl + 8    //should be 90
 
 			//copy ntp packet :-(
-			for a, b := range sendMsgTS.payload {
-
-				log.Printf("a=%v b=%v", a, b)
+			for a, b := range payloadMsg {
+				//log.Printf("a=%v b=%v", a, b)
 				bufferPtr[a+offsetNTP] = C.char(b)
 			}
 
@@ -837,14 +886,18 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			/*
 				Add Ancillary data
 			*/
-			//ADD TIMESTAMPS
 			var cmsg *C.struct_cmsghdr
+			var cmsgDataPtr *C.uchar
+
+			//ADD TIMESTAMPS
 			cmsg = cmsgFirstHdr(msghdr)
-			cmsg.cmsg_len = 64                  //unsigned long 8bytes
+			dataSize := unsafe.Sizeof(sendMsgTS.ts3)
+			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
+			msgControllen += cmsgSpace(C.size_t(dataSize))
+			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			//cmsg.cmsg_len = 64                  //unsigned long 8bytes
 			cmsg.cmsg_level = C.SOL_SOCKET      //int 4bytes
 			cmsg.cmsg_type = C.SCM_TIMESTAMPING //int 4bytes
-
-			var cmsgDataPtr *C.uchar
 			cmsgDataPtr = cmsgData(cmsg)
 
 			//ACHTUNG: Kopiere hier Kernel und HW rein... unklar ob Chrony logik damit klarkommt
@@ -857,19 +910,26 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 
 			//ADD IP_PKTINFO
 			cmsg = cmsgNextHdr(msghdr, cmsg)
-			cmsg.cmsg_len = 28
+			var iDontWantThis C.struct_in_pktinfo
+			dataSize = unsafe.Sizeof(iDontWantThis)
+			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
+			msgControllen += cmsgSpace(C.size_t(dataSize))
+			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			//cmsg.cmsg_len = 28
 			cmsg.cmsg_level = C.IPPROTO_IP
 			cmsg.cmsg_type = C.IP_PKTINFO
 			cmsgDataPtr = cmsgData(cmsg)
 
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = 2
-			var aaa C.struct_in_addr
-			var bbb C.struct_in_addr
-			//remove this c-call
-			aaa.s_addr = C.htonl(173026643) //10.80.45.83??
-			bbb.s_addr = C.htonl(173026688) //10.80.45.128??
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst = aaa
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr = bbb
+			srcipIP := sendMsgTS.pkt.Source.Host.IP().To4()
+			var srcIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(srcipIP))
+
+			dstipIP := sendMsgTS.pkt.Destination.Host.IP().To4()
+			var dstIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(dstipIP))
+
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = s.Sinfo.if_index
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = srcIP
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP              //TODO: activate this line and remove the next one
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = C.htonl(173026688) //10.80.45.128
 
 			/*
 				memcpy(&ipi, CMSG_DATA(cmsg), sizeof(ipi));
@@ -878,13 +938,129 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 				DEBUG_LOG("\t\t\t\t\tipi.ipi_addr.s_addr=%s (Header destination address)", inet_ntoa(ipi.ipi_addr));
 			*/
 
+			//TODO msg_controllen
+			msghdr.msg_controllen = msgControllen
+
 			updatedElemmsgvec++
 		}
 		return C.int(updatedElemmsgvec)
 	}
 
+	//TODO: IP reaktivieren sobald korrekter Sender. d.h. ohne ntpscionendpoint ((*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr)
 	if receiveNTP && nMsg > 0 {
-		log.Printf("(SCIONgorecvmmsg) Receive NTP packet needs to be implemented!!!!!!!!!!!!!!!!")
+		//log.Printf("(SCIONgorecvmmsg) Receive NTP packet needs to be implemented!!!!!!!!!!!!!!!!")
+		for i := 0; i < nMsg && i < int(vlen); i++ {
+			rcvMsgNTPTS := <-s.rcvQueueNTPTS
+			pld, _ := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+			log.Printf("(SCIONgorecvmmsg) ----> rcvMsgNTPTS=%v", rcvMsgNTPTS)
+
+			//TODO C.VLEN should be variable i.e. equal to vlen
+			var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
+			var msghdr *C.struct_msghdr
+			msghdr = &msgvec[i].msg_hdr
+			var msgControllen C.size_t
+
+			//Todo
+			/*
+			   msg_hdr.msg_namelen=16
+			   msg_hdr.msg_name (AF_INET) = 10.80.45.128:123*/
+			ipIP := rcvMsgNTPTS.pkt.Source.Host.IP().To4()
+			var srcIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(ipIP))
+			msghdr.msg_namelen = C.uint(16)
+			(*C.struct_sockaddr)(unsafe.Pointer(msghdr.msg_name)).sa_family = C.AF_INET
+			(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = C.htonl(173026688) //TODO: activate this value "srcIP" directly
+			//(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = srcIP
+			(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_port = C.htons(C.uint16_t(pld.SrcPort))
+
+			log.Printf("needed \t%v", C.htonl(173026688)) //10.80.45.128
+			log.Printf("having \t%v", srcIP)
+
+			payload := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload).Payload
+			payloadLen := len(payload)
+			msgvec[i].msg_len = C.uint(payloadLen) //48? depends on extensions
+			log.Printf("msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
+			/*
+			   payloadLen := len(pld.Payload)
+			   ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
+
+			   //adhoc security.... improve this
+			   if payloadLen < ntpSize {
+			   	fmt.Printf("(rcvLogic fd=%v) \t---->payload can't be a NTP packet (%d < %d) (IGNORING THIS...\n", payloadLen, ntpSize)
+			   }
+			*/
+
+			/*
+				add the ntp packet
+			*/
+			var bufferPtr *[C.IOVLEN]C.char
+			bufferPtr = (*[C.IOVLEN]C.char)(msghdr.msg_iov.iov_base)
+			//copy ntp packet :-(
+			for a, b := range payload {
+				//log.Printf("a=%v b=%v", a, b)
+				bufferPtr[a] = C.char(b)
+			}
+
+			/*
+				Add Ancillary data
+			*/
+			var cmsg *C.struct_cmsghdr
+			var cmsgDataPtr *C.uchar
+
+			// Add SCM_TIMESTAMPING_PKTINFO
+			cmsg = cmsgFirstHdr(msghdr)
+			var tspktinfo C.struct_scm_ts_pktinfo
+			dataSize := unsafe.Sizeof(tspktinfo)
+			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
+			msgControllen += cmsgSpace(C.size_t(dataSize))
+			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			//cmsg.cmsg_len = 32
+			cmsg.cmsg_level = C.SOL_SOCKET
+			cmsg.cmsg_type = C.SCM_TIMESTAMPING_PKTINFO
+			cmsgDataPtr = cmsgData(cmsg)
+			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).if_index = C.uint(s.Sinfo.if_index)
+			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).pkt_length = C.uint(pktLengtLayer2)
+
+			// Add SO_TIMESTAMPING
+			cmsg = cmsgNextHdr(msghdr, cmsg)
+			dataSize = unsafe.Sizeof(rcvMsgNTPTS.ts3)
+			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
+			msgControllen += cmsgSpace(C.size_t(dataSize))
+			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			//cmsg.cmsg_len = 64
+			cmsg.cmsg_level = C.SOL_SOCKET
+			cmsg.cmsg_type = C.SCM_TIMESTAMPING
+			cmsgDataPtr = cmsgData(cmsg)
+			*(*C.struct_scm_timestamping)(unsafe.Pointer(cmsgDataPtr)) = rcvMsgNTPTS.ts3
+
+			//ADD IP_PKTINFO
+			cmsg = cmsgNextHdr(msghdr, cmsg)
+			var iDontWantThis C.struct_in_pktinfo
+			dataSize = unsafe.Sizeof(iDontWantThis)
+			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
+			msgControllen += cmsgSpace(C.size_t(dataSize))
+			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			//cmsg.cmsg_len = 28
+			cmsg.cmsg_level = C.IPPROTO_IP
+			cmsg.cmsg_type = C.IP_PKTINFO
+			cmsgDataPtr = cmsgData(cmsg)
+
+			ipIP = rcvMsgNTPTS.pkt.Destination.Host.IP().To4()
+			var dstIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(ipIP))
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = s.Sinfo.if_index
+			//var aaa C.struct_in_addr
+			//var bbb C.struct_in_addr
+			//remove this c-call.... PARSE correct source address
+			//aaa.s_addr = dstIP //C.htonl(173026643) //10.80.45.83??
+			//bbb.s_addr = dstIP //C.htonl(173026643) //10.80.45.83??
+			//should this always be the same for ipi_spec_dst and ipi_addr
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = dstIP
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP
+
+			msghdr.msg_controllen = msgControllen
+
+			updatedElemmsgvec++
+		}
+
 		return C.int(updatedElemmsgvec)
 	}
 

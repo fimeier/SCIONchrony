@@ -7,6 +7,8 @@
 #define VLEN 16
 #define IOVLEN 1140
 
+#define IFINDEX 2 //solve this
+
 #include "config.h"
 #include "logging.h"
 #include "util.h"
@@ -115,6 +117,7 @@ typedef enum
 typedef struct fdInfo
 {
    int fd;
+   int if_index;
    int domain;
    int type;
    int protocol;

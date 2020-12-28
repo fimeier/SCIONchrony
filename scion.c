@@ -259,6 +259,8 @@ int SCION_socket(int __domain, int __type, int __protocol)
     sinfo->protocol = __protocol;
     sinfo->connectionType = NOT_CONNECTED;
 
+    sinfo->if_index = IFINDEX;
+
     if (DEBUG)
     {
         switch (__domain)
@@ -670,6 +672,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
         DEBUG_LOG("\t\t\t\tmsg_hdr->msg_control@%p", msg_hdr->msg_control);
         DEBUG_LOG("\t\t\t\tmsg_hdr->msg_controllen=%lu", msg_hdr->msg_controllen);
 
+
         struct cmsghdr *cmsg;
         for (cmsg = CMSG_FIRSTHDR(msg_hdr); cmsg; cmsg = CMSG_NXTHDR(msg_hdr, cmsg))
         {
@@ -696,11 +699,13 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
             if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING_PKTINFO)
             {
                 processed = 1;
+                DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type SCM_TIMESTAMPING_PKTINFO", cmsg);
+
                 struct scm_ts_pktinfo ts_pktinfo;
 
                 memcpy(&ts_pktinfo, CMSG_DATA(cmsg), sizeof(ts_pktinfo));
                 DEBUG_LOG("\t\t\t\t\tts_pktinfo.if_index=%u", ts_pktinfo.if_index);
-                DEBUG_LOG("\t\t\t\t\tts_pktinfo.pkt_length=%u", ts_pktinfo.pkt_length);
+                DEBUG_LOG("\t\t\t\t\tts_pktinfo.pkt_length=%u (l2_length?)", ts_pktinfo.pkt_length);
             }
 #endif
 
@@ -872,12 +877,16 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over SCION connection", n);
 
-        printMMSGHDR(__vmessages, n, scion_type);
 
         //TODO remove recvmmsg()
-        DEBUG_LOG("TODO remove recvmmsg()!!!!");
-        //n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+        /*DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        if (receiveFlag == SCION_FILE_INPUT)
+        {
+            printMMSGHDR(__vmessages, n, scion_type);
+            n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+        }
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
+        */
     }
     //Chronyd acts as the NTP Server
     else if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
@@ -908,7 +917,7 @@ nfds   This argument should be set to the highest-numbered file
         indicated file descriptors in each set are checked, up to this limit
               */
 int SCION_select(int __nfds, fd_set *__restrict __readfds,
-                 fd_set *__restrict __writefds, 
+                 fd_set *__restrict __writefds,
                  fd_set *__restrict __exceptfds,
                  struct timeval *__restrict __timeout)
 {
@@ -917,7 +926,6 @@ int SCION_select(int __nfds, fd_set *__restrict __readfds,
     //int n = SCIONselect(__nfds, __readfds, __writefds, __exceptfds, __timeout);
     int n = SCIONselect(__nfds, __readfds, __writefds, __exceptfds, __timeout);
     DEBUG_LOG("SCION_select(...) found %d ready fd's", n);
-
 
     //Debug stuff
     int readyFDs = n;

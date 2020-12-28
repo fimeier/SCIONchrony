@@ -164,7 +164,7 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 				},
 				Path: reversePath, //sp.Path(),
 				Payload: snet.UDPPayload{
-					SrcPort: localPort,
+					SrcPort: 123, //localPort, muss so sein da ich die Messages ja weiterleite....
 					DstPort: uint16(pld.SrcPort),
 					Payload: buf[0:n],
 				},
