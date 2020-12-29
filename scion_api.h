@@ -98,8 +98,6 @@ extern int SetSciondAddr(char* p0);
 
 extern int SetLocalAddr(char* p0);
 
-extern void SCIONPrintState(int p0);
-
 extern int SCIONgoconnect(int p0);
 
 extern int SCIONgosetsockopt(int p0);

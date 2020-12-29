@@ -3,7 +3,7 @@
 //static int socked_mapping[1024];
 
 //TODO CHange is if still needed: vermutlich nicht mehr nötig (vgl nfds bei select)
-static unsigned int highest_fd = 0;
+//static unsigned int highest_fd = 0;
 
 static fdInfo *fdInfos[1024];
 
@@ -230,14 +230,6 @@ int SCION_close(int sock_fd)
 
     SCIONgoclose(sock_fd);
 
-    SCIONPrintState(sock_fd);
-
-    if (sock_fd == highest_fd)
-    {
-        highest_fd--;
-        DEBUG_LOG("Setting highest_fd=%d ", highest_fd);
-    }
-
     if (fdInfos[sock_fd] != NULL)
     {
         free(fdInfos[sock_fd]);
@@ -266,29 +258,29 @@ int SCION_socket(int __domain, int __type, int __protocol)
         switch (__domain)
         {
         case AF_INET:
-            DEBUG_LOG("\t\t domain = AF_INET");
+            DEBUG_LOG("----> domain = AF_INET");
             break;
         case AF_UNIX:
-            DEBUG_LOG("\t\t domain = AF_UNIX");
+            DEBUG_LOG("----> domain = AF_UNIX");
             break;
         default:
-            DEBUG_LOG("\t\t domain = tbd");
+            DEBUG_LOG("----> domain = tbd");
             break;
         }
 
         switch (__type)
         {
         case SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK:
-            DEBUG_LOG("\t\t type = SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK");
+            DEBUG_LOG("----> type = SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK");
             break;
         case SOCK_DGRAM | SOCK_NONBLOCK:
-            DEBUG_LOG("\t\t type = SOCK_DGRAM | SOCK_NONBLOCK");
+            DEBUG_LOG("----> type = SOCK_DGRAM | SOCK_NONBLOCK");
             break;
         case SOCK_DGRAM | SOCK_CLOEXEC:
-            DEBUG_LOG("\t\t type = SOCK_DGRAM | SOCK_CLOEXEC");
+            DEBUG_LOG("----> type = SOCK_DGRAM | SOCK_CLOEXEC");
             break;
         default:
-            DEBUG_LOG("\t\t type = tbd");
+            DEBUG_LOG("----> type = tbd");
             break;
         }
     }
@@ -297,20 +289,20 @@ int SCION_socket(int __domain, int __type, int __protocol)
     sinfo->fd = fd;
     fdInfos[fd] = sinfo;
 
-    DEBUG_LOG("\t\t fd = %d", fd);
+    DEBUG_LOG("----> fd = %d (received from system, using this for SCION)", fd);
 
-    if (fd > highest_fd)
+    /*if (fd > highest_fd)
     {
         highest_fd = fd;
-        DEBUG_LOG("Setting highest_fd=%d ", highest_fd);
-    }
+        DEBUG_LOG("----> Setting highest_fd=%d ", highest_fd);
+    }*/
     //c2go scion api
     int SCION_fd = SCIONgosocket(__domain, __type, __protocol, sinfo);
     if (fd != SCION_fd)
     {
         LOG_FATAL("fd != SCION_fd i.e. %d != %d", fd, SCION_fd);
     }
-    SCIONPrintState(fd);
+    //SCIONPrintState(fd);
     return fd;
 }
 
@@ -330,20 +322,20 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     case IPPROTO_IP:
-        DEBUG_LOG("\t\t level = IPPROTO_IP");
+        DEBUG_LOG("----> level = IPPROTO_IP");
         scion_level = SCION_IPPROTO_IP;
         switch (__optname)
         {
         case IP_PKTINFO:
-            DEBUG_LOG("\t\t optname = IP_PKTINFO");
+            DEBUG_LOG("----> optname = IP_PKTINFO");
             scion_optname = SCION_IP_PKTINFO;
             break;
         case IP_FREEBIND:
-            DEBUG_LOG("\t\t optname = IP_FREEBIND");
+            DEBUG_LOG("----> optname = IP_FREEBIND");
             scion_optname = SCION_IP_FREEBIND;
             break;
         default:
-            DEBUG_LOG("\t\t optname = %d",__optname);
+            DEBUG_LOG("----> optname = %d",__optname);
             scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
@@ -352,32 +344,32 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     case SOL_SOCKET:
-        DEBUG_LOG("\t\t level = SOL_SOCKET");
+        DEBUG_LOG("----> level = SOL_SOCKET");
         scion_level = SCION_SOL_SOCKET;
         switch (__optname)
         {
         case SO_REUSEADDR:
-            DEBUG_LOG("\t\t optname = SO_REUSEADDR");
+            DEBUG_LOG("----> optname = SO_REUSEADDR");
             scion_optname = SCION_SO_REUSEADDR;
             break;
         case SO_REUSEPORT:
-            DEBUG_LOG("\t\t optname = SO_REUSEPORT");
+            DEBUG_LOG("----> optname = SO_REUSEPORT");
             scion_optname = SCION_SO_REUSEPORT;
             break;
         case SO_TIMESTAMPING:
-            DEBUG_LOG("\t\t optname = SO_TIMESTAMPING");
+            DEBUG_LOG("----> optname = SO_TIMESTAMPING");
             scion_optname = SCION_SO_TIMESTAMPING;
             break;
         case SO_BROADCAST:
-            DEBUG_LOG("\t\t optname = SO_BROADCAST");
+            DEBUG_LOG("----> optname = SO_BROADCAST");
             scion_optname = SCION_SO_BROADCAST;
             break;
         case SO_SELECT_ERR_QUEUE:
-            DEBUG_LOG("\t\t optname = SO_SELECT_ERR_QUEUE");
+            DEBUG_LOG("----> optname = SO_SELECT_ERR_QUEUE");
             scion_optname = SCION_SO_SELECT_ERR_QUEUE;
             break;
         default:
-             DEBUG_LOG("\t\t optname = %d",__optname);
+             DEBUG_LOG("----> optname = %d",__optname);
             scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
@@ -385,8 +377,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     default:
-        DEBUG_LOG("\t\t level = %d",__level);
-        DEBUG_LOG("\t\t optname = %d",__optname);
+        DEBUG_LOG("----> level = %d",__level);
+        DEBUG_LOG("----> optname = %d",__optname);
         scion_optname = SCION_OPT_UNDEFINED;
         break;
     }
@@ -395,18 +387,18 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     int createRxTimestamp = 0;
     if (*((int *)__optval) != 0)
     {
-        DEBUG_LOG("\t\t optval = %d => activate option", *((int *)__optval));
+        DEBUG_LOG("----> optval = %d => activate option", *((int *)__optval));
         if (__optname == SO_TIMESTAMPING)
         {
             if (*((int *)__optval) == ts_flags_p52)
             { //access ts_flags in ntp_io_linux
-                DEBUG_LOG("\t\t\t\t|-----> This is the option to activate RX-Timestamps (HW/Kernel)");
+                DEBUG_LOG("---->  This is the option to activate RX-Timestamps (HW/Kernel)");
                 createTxTimestamp = 0;
                 createRxTimestamp = 1;
             }
             if (*((int *)__optval) == (ts_flags_p52 | ts_tx_flags_p52))
             { //access ts_flags in ntp_io_linux
-                DEBUG_LOG("\t\t\t\t|-----> This is the option to activate TX/RX-Timestamps (HW/Kernel)");
+                DEBUG_LOG("----> This is the option to activate TX/RX-Timestamps (HW/Kernel)");
                 createTxTimestamp = 1;
                 createRxTimestamp = 1;
             }
@@ -414,7 +406,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     }
     else
     {
-        DEBUG_LOG("\t\t optval = 0 => disable option");
+        DEBUG_LOG("----> optval = 0 => disable option");
     }
 
     /*On success, zero is returned for the standard options.  On error, -1
@@ -432,7 +424,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     }
     if (result < 0)
     {
-        DEBUG_LOG("\t\t setsockopt() returned an error!");
+        DEBUG_LOG("----> setsockopt() returned an error!");
     }
 
     return result;
@@ -940,7 +932,7 @@ int SCION_select(int __nfds, fd_set *__restrict __readfds,
 
     //Debug stuff
     int readyFDs = n;
-    for (int fd = 0; readyFDs && fd <= highest_fd; fd++)
+    for (int fd = 0; readyFDs && fd < __nfds; fd++)
     { //mefi84 man geht alle FD's durch...
         if (__exceptfds && FD_ISSET(fd, __exceptfds))
         {

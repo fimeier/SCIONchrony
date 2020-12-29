@@ -31,6 +31,7 @@ import (
 	"unsafe"
 
 	"github.com/scionproto/scion/go/lib/addr"
+	"github.com/scionproto/scion/go/lib/daemon"
 	"github.com/scionproto/scion/go/lib/sciond"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
@@ -179,7 +180,7 @@ func init() {
 	log.Printf("(Init) ....logging behaviour has been changed")
 
 	//Add default configuration
-	sciondAddr = sciond.DefaultAPIAddress
+	sciondAddr = daemon.DefaultAPIAddress
 	localAddrStr = "1-ff00:0:112,10.80.45.83" //TODO parse the local address from somewhere
 	localAddr, _ = snet.ParseUDPAddr(localAddrStr)
 	localAddr.Host.Port = 0 //ignore user defined srcport
@@ -213,27 +214,6 @@ var fdstatus = make(map[int]FDSTATUS)
 
 var fdList = make(map[int]int)
 var maxFD = 1024
-
-//export SCIONPrintState
-func SCIONPrintState(fd C.int) {
-	PrintState(int(fd))
-}
-
-func PrintState(fd int) {
-	var state FDSTATUS
-	state, ok := fdstatus[fd]
-	if !ok {
-		log.Printf("PrintState) There is no state available for fd=%d\n", fd)
-		return
-	}
-	log.Printf("(PrintState) state=%v", state)
-
-	domain := int(state.Sinfo.domain)
-	_type := int(state.Sinfo._type)
-	protocol := int(state.Sinfo.protocol)
-	connectionType := int(state.Sinfo.connectionType)
-	log.Printf("(PrintState) fd=%d domainS=%d type=%d protocolS=%d connectionType=%d sinfo=%p\n", fd, domain, _type, protocol, connectionType, state.Sinfo)
-}
 
 //export SCIONgoconnect
 func SCIONgoconnect(_fd C.int) C.int {
@@ -402,9 +382,19 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 //export SCIONgosocket
 func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr) C.int {
 	fd := int(sinfo.fd)
-	log.Printf("(SCIONgosocket fd=) \"Creating socket\" %d\n", fd, fd)
-	log.Printf("(SCIONgosocket fd=) \t|----> TODO parse/add socket settings like SOCK_NONBLOCK, type, etc...", fd)
+	log.Printf("(SCIONgosocket) Creating \"socket\" fd=%d\n", fd)
 
+	_, exists := fdstatus[fd]
+	if exists {
+		log.Printf("(SCIONgosocket) ERROR Already existing entry for fd=%d,fd")
+		return C.int(-1) //TODOdefine correct behaviour
+	}
+
+	newState := FDSTATUS{Fd: fd, Sinfo: sinfo}
+	//store it
+	fdstatus[fd] = newState
+
+	//code snippets
 	/*
 		domainS := int(sinfo.domain)
 		typeS := int(sinfo._type)
@@ -413,29 +403,18 @@ func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr)
 		fmt.Printf("\tdomain=%d type=%d protocol=%d\n", domain, _type, protocol)
 		fmt.Printf("fd=%d domainS=%d typeS=%d protocolS=%d connectionTypeS=%d\nsinfo=%v\n", fd, domainS, typeS, protocolS, connectionTypeS, sinfo)
 	*/
-	_, exists := fdstatus[fd]
-	if exists {
-		log.Printf("(SCIONgosocket) ERROR Already existing entry for fd=%d,fd")
-		return C.int(-1) //TODOdefine correct behaviour
-	}
-
-	newState := FDSTATUS{Fd: fd, Sinfo: sinfo}
-	//store it back
-	fdstatus[fd] = newState
-
-	//code snippets
 	d := int(fdstatus[fd].Sinfo.domain)
 	t := int(fdstatus[fd].Sinfo._type)
 	p := int(fdstatus[fd].Sinfo.protocol)
-	log.Printf("(SCIONgosocket fd=%v) \t|----> domain=%v type=%v protocol=%v", fd, d, t, p)
+	log.Printf("(SCIONgosocket) ----> domain=%v type=%v protocol=%v", d, t, p)
 	if t == int(C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK) {
-		log.Printf(" \t|----> type == C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK")
+		log.Printf("(SCIONgosocket) ----> type == C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK")
 	}
 	if int(fdstatus[fd].Sinfo._type&C.SOCK_DGRAM) == C.SOCK_DGRAM {
-		log.Printf(" \t|----> type => C.SOCK_DGRAM")
+		log.Printf("(SCIONgosocket) ----> type => C.SOCK_DGRAM")
 	}
 	if int(fdstatus[fd].Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK {
-		log.Printf(" \t|----> type => C.SOCK_NONBLOCK")
+		log.Printf("(SCIONgosocket) ----> type => C.SOCK_NONBLOCK")
 	}
 
 	return C.int(newState.Fd)

@@ -547,8 +547,6 @@ int main
   if (user_check && getuid() != 0)
     LOG_FATAL("Not superuser");
 
-  printf("getuid()=%d\n",getuid());
-
   /* Turn into a daemon */
   if (!nofork) {
     go_daemon();
