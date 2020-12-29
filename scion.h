@@ -2,7 +2,7 @@
 
 #define MSGBUFFERSIZE 100
 
-#define GODEBUGNEW 1
+#define GODEBUG2 1
 
 #define VLEN 16
 #define IOVLEN 1140
@@ -137,7 +137,7 @@ typedef struct addressMapping
    char addressSCION[MAXADDRESSLENGTH];
 } addressMapping;
 
-void SCION_Initialise();
+void SCION_Initialise(void);
 
 void SCION_parse_source(char *line, char *type);
 
@@ -220,4 +220,7 @@ void printNTPPacket(void *ntpPacket, int len);
 
 void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
 
+char *getClientSCIONAddress(char *address);
+
+char *getNTPServerSCIONAddress(char *address);
 

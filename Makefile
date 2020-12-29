@@ -29,8 +29,9 @@ CHRONYVARDIR = /var/lib/chrony
 DESTDIR =
 
 CC = gcc
-BACKUPCFLAGS = -O2 -g -D_FORTIFY_SOURCE=2 -fPIE -fstack-protector-strong --param=ssp-buffer-size=4 -Wmissing-prototypes -Wall -pthread
-CFLAGS = -O0 -g -Wall -pthread
+BACKUPCFLAGSORIGINAL = -O2 -g -D_FORTIFY_SOURCE=2 -fPIE -fstack-protector-strong --param=ssp-buffer-size=4 -Wmissing-prototypes -Wall -pthread
+BACKUPCFLAGMEINS = -O0 -g -Wall -pthread
+CFLAGS = -O2 -g -D_FORTIFY_SOURCE=2 -fPIE -fstack-protector-strong --param=ssp-buffer-size=4 -Wmissing-prototypes -Wall -pthread
 
 CPPFLAGS = 
 LDFLAGS =  -pie -Wl,-z,relro,-z,now

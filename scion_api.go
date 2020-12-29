@@ -58,6 +58,18 @@ go build -buildmode=c-shared -o scion_api.so *.go
 
 const pktLengtLayer2 = 90
 
+//datastructure for SCIONselect
+type fdset struct {
+	fd             int
+	exists         bool
+	readSelected   bool
+	writeSelected  bool
+	exceptSelected bool
+	readReady      bool
+	writeReady     bool
+	exceptReady    bool
+}
+
 //FDSTATUS contains EVERYTHING
 type FDSTATUS struct {
 	/*TODO: Decide how to use it/change it..... */
@@ -158,8 +170,9 @@ func init() {
 	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.LUTC)
 
 	//bug in C.GODEBUG???... can't activate it anymore... always existing and zero..
-	//if C.GODEBUG == 0 {
-	if C.GODEBUGNEW == 0 {
+	//now for GODEBUGNEW
+	if C.GODEBUG2 == 0 {
+		//if C.GODEBUGNEW == 0 {
 		log.Printf("(Init) log.* Output has been disabled as #define GODEBUGNEW 0 is set")
 		log.SetOutput(ioutil.Discard)
 	}
@@ -300,57 +313,60 @@ func SCIONgoconnect(_fd C.int) C.int {
 
 func (s *FDSTATUS) rcvLogic() {
 	log.Printf("(rcvLogic fd=%v) Started", s.Fd)
-	for {
-		if cancelled(s.doneRcv) {
-			log.Printf("(rcvLogic fd=%v) I have been cancelled. Returning.", s.Fd)
-			return
-		}
+	/*for { replace return with continue... add timeout
+	if cancelled(s.doneRcv) {
+		log.Printf("(rcvLogic fd=%v) I have been cancelled. Returning.", s.Fd)
+		return
+	}*/
 
-		var rcvMsgNTPTS rcvMsgNTPTS
+	var rcvMsgNTPTS rcvMsgNTPTS
 
-		//var pkt snet.Packet
-		//var ov net.UDPAddr
-		second := time.Now().Add(time.Second)
-		s.conn.SetReadDeadline(second)
-		//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
-		err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
-		//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
-		if err != nil {
-			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
-			continue
-		}
-		fakeHardwareRxTime := time.Now() //HW time komplett anders
-		fakeKernelRxTime := time.Now()   //HW time komplett anders
+	//var pkt snet.Packet
+	//var ov net.UDPAddr
+	//second := time.Now().Add(time.Second)
+	//s.conn.SetReadDeadline(second)
+	//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
+	err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
+	//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
+	if err != nil {
+		//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+		return //continue
+	}
+	fakeHardwareRxTime := time.Now() //HW time komplett anders
+	fakeKernelRxTime := time.Now()   //HW time komplett anders
+	log.Printf("(rcvLogic fd=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
 
-		//var ts3 C.struct_scm_timestamping
+	//var ts3 C.struct_scm_timestamping
 
-		if s.rxKERNELts {
-			rcvMsgNTPTS.tsType = tskernel
-			//kernel ts
-			rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(fakeKernelRxTime.Unix())
-			rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(fakeKernelRxTime.UnixNano() - fakeKernelRxTime.Unix()*1e9)
-		}
-
-		if s.rxHWts {
-			rcvMsgNTPTS.tsType = tshardware
-			if s.rxKERNELts {
-				rcvMsgNTPTS.tsType = tskernelhardware
-			}
-			//kernel ts
-			rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(fakeHardwareRxTime.Unix())
-			rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(fakeHardwareRxTime.UnixNano() - fakeHardwareRxTime.Unix()*1e9)
-		}
-
-		//Needed? If the payload can be extracted there should be a message
-		_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
-		if !ok {
-			continue
-		}
-
-		/* the only thing really important comes here.. */
-		s.rcvQueueNTPTS <- rcvMsgNTPTS
+	if s.rxKERNELts {
+		rcvMsgNTPTS.tsType = tskernel
+		//kernel ts
+		rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(fakeKernelRxTime.Unix())
+		rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(fakeKernelRxTime.UnixNano() - fakeKernelRxTime.Unix()*1e9)
 	}
 
+	if s.rxHWts {
+		rcvMsgNTPTS.tsType = tshardware
+		if s.rxKERNELts {
+			rcvMsgNTPTS.tsType = tskernelhardware
+		}
+		//kernel ts
+		rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(fakeHardwareRxTime.Unix())
+		rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(fakeHardwareRxTime.UnixNano() - fakeHardwareRxTime.Unix()*1e9)
+	}
+
+	//Needed? If the payload can be extracted there should be a message
+	_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+	if !ok {
+		return //continue
+	}
+
+	/* the only thing really important comes here.. */
+	log.Printf("(rcvLogic fd=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
+	s.rcvQueueNTPTS <- rcvMsgNTPTS
+	//}
+	s.rcvLogicStarted = false
+	log.Printf("(rcvLogic fd=%v) ----> Finished recv my message. Returning.", s.Fd)
 }
 
 //export SCIONgosetsockopt
@@ -441,6 +457,14 @@ func SCIONgoclose(_fd C.int) C.int {
 		log.Printf("(SCIONgoclose) ----> There is no doneRcv channel. Nothing to close")
 	}
 	//todo: what else needs to be done?
+
+	if s.sdc != nil {
+		//unklar ob dass alle connections killt... weil ich Backgroundcontext genommen habe,
+		s.sdc.Close(s.ctx)
+	}
+
+	//close dispatcher???? s.pds
+
 	delete(fdstatus, int(fd))
 
 	//TODO close() returns zero on success.  On error, -1 is returned, and errno
@@ -480,126 +504,177 @@ func (s *fdsetType) IsSet(fd uintptr) bool {
 	return s.Bits[n]&(1<<m) != 0
 }
 
+/*
+Optimierung nötig!!!!
+
+Warning: Chronyd is using select() as a timeout mechanism
+=> "Iff chrony is a client and plans to send a msg in 60sec, it will call select() with an appropriate timeout, return without any ready fd's and then check for sendtimeouts...."
+REMARK: At the moment there is no write-Queue => all Flags will be set to  zero if present
+	fmt.Printf("Before calling select: readfds=%v\n", readfds)
+	n, err := syscall.Select(int(nfds),
+		(*syscall.FdSet)(unsafe.Pointer(readfds)),
+		(*syscall.FdSet)(unsafe.Pointer(writefds)),
+		(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
+		(*syscall.Timeval)(unsafe.Pointer(timeout)))
+*/
 //export SCIONselect
 func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds C.fdsetPtr, timeout C.timevalPtr) C.int {
-	highestFd := int(nfds) - 1
-
-	numOfBitsSet := 0
-
-	//TODO: DO something with the timeout
-	//at the moment it directly returns
-
+	start := time.Now()
 	var tvsec C.__time_t
 	var tvusec C.__suseconds_t
+	tvsec = timeout.tv_sec
+	tvusec = timeout.tv_usec
+
+	highestFd := int(nfds) - 1
+
 	var blocking bool
 	var t time.Duration
 	var ticker <-chan time.Time
+	var tickTime time.Duration
 	if timeout == nil {
 		log.Printf("timeout seems to be NULL => select() will block indefinitely")
 		blocking = true
-		ticker = time.Tick(500 * time.Millisecond)
+		tickTime = 500 * time.Millisecond
+		ticker = time.Tick(tickTime)
 	} else {
-		tvsec = timeout.tv_sec
-		tvusec = timeout.tv_usec
 		t = time.Duration(tvsec)*time.Second + time.Duration(tvusec)*time.Microsecond
-		ticker = time.Tick(t / 100)
+		tickTime = t / 20
+		ticker = time.Tick(tickTime)
 	}
 
-	log.Printf("blocking=%v tvsec=%v  tvusec=%v t=%v highestFd=%v", blocking, tvsec, tvusec, t, highestFd)
+	log.Printf("(SCIONselect) blocking=%v tvsec=%v  tvusec=%v timeout=%v highestFd=%v tickTime=%v", blocking, tvsec, tvusec, t, highestFd, tickTime)
 
-	//(*syscall.FdZero)(unsafe.Pointer(writefds))
-
+	//Parse fdset: this is a condensated representation of c's fdsets
 	var rset *fdsetType
 	if readfds != nil {
 		rset = (*fdsetType)(unsafe.Pointer(readfds))
 	}
-
+	var wset *fdsetType
+	if writefds != nil {
+		wset = (*fdsetType)(unsafe.Pointer(writefds))
+	}
 	var eset *fdsetType
 	if exceptfds != nil {
 		eset = (*fdsetType)(unsafe.Pointer(exceptfds))
 	}
 
-	var wset *fdsetType
-	if writefds != nil {
-		wset = (*fdsetType)(unsafe.Pointer(writefds))
+	/*
+		Add fd to fdsets if 1+ bits are set
+		Logic: SCIONselect() will test all fd's in this set and remove any bits corresponding to "notready fd's"
+	*/
+	fdsets := make([]*fdset, 0, highestFd)
+	for fd := 1; fd <= highestFd; fd++ {
+		var fdPtr uintptr
+		fdPtr = uintptr(fd)
+
+		_, exists := fdstatus[fd] //we can ignore them: Assumption: We are still in chronyd's main thread => while we are in SCIONselect, there cannot be created any new states. If this is not true anymore, check it at the beginning of the loop. Relevant for very long running timeouts.
+
+		var rIsSet, eIsSet, wIsSet bool
+		if readfds != nil {
+			rIsSet = rset.IsSet(fdPtr)
+		}
+		if writefds != nil {
+			wIsSet = wset.IsSet(fdPtr)
+		}
+		if exceptfds != nil {
+			eIsSet = eset.IsSet(fdPtr)
+		}
+
+		if rIsSet || eIsSet || wIsSet {
+			//add set to slice
+			fdsets = append(fdsets,
+				&fdset{
+					fd:             fd,
+					exists:         exists,
+					readSelected:   rIsSet,
+					writeSelected:  wIsSet,
+					exceptSelected: eIsSet,
+					readReady:      false,
+					writeReady:     false,
+					exceptReady:    false,
+				})
+		}
+
 	}
 
-	for start := time.Now(); numOfBitsSet == 0 && (time.Since(start) < t || blocking); {
-		for fd := 1; fd <= highestFd; fd++ {
-			s, exists := fdstatus[fd]
-			if !exists {
+	numOfBitsSet := 0
+	for {
+
+		numOfBitsSet = 0 //numOfBitsSet is always zero here
+
+		for _, fdset := range fdsets {
+			if !fdset.exists { //optimization: prevents fdstatus[fdset.fd] calls
 				continue
 			}
-			nMsg := len(s.rcvQueueNTPTS)
-			nErrorMsg := len(s.sendQueueTS)
+			s, exists := fdstatus[fdset.fd]
+			if !exists {
+				continue //should never happen
+			}
 
-			var fdPtr uintptr
-			fdPtr = uintptr(fd)
-
-			//log.Printf("(SCIONselect) fd=%v: nMsg=%v nErrorMsg=%v", fd, nMsg, nErrorMsg)
-
-			rIsSet := rset.IsSet(fdPtr)
-			if readfds != nil && rIsSet {
-				if nMsg > 0 {
-					log.Printf("(SCIONselect) fd=%v has nMsg=%v ready\n", fd, nMsg)
+			var readMsg int
+			var errorMsg int
+			//Only get the state for an fd if it was asked for
+			if fdset.readSelected {
+				readMsg = len(s.rcvQueueNTPTS) //read input
+				if readMsg > 0 {
+					fdset.readReady = true
 					numOfBitsSet++
-				} else {
-					//log.Printf("(SCIONselect) readfds=%v rIsSet=%v\n", readfds, rIsSet)
-					rset.Clr(fdPtr)
-					rIsSet = rset.IsSet(fdPtr)
-					//log.Printf("(SCIONselect) now it should be cleared: readfds=%v rIsSet=%v\n", readfds, rIsSet)
+				}
+			}
+			if fdset.exceptSelected {
+				errorMsg = len(s.sendQueueTS) //exceptions
+				if errorMsg > 0 {
+					fdset.exceptReady = true
+					numOfBitsSet++
 				}
 			}
 
-			eIsSet := eset.IsSet(fdPtr)
-			if exceptfds != nil && eIsSet {
-				if nErrorMsg > 0 {
-					log.Printf("(SCIONselect) fd=%v has nErrorMsg=%v ready\n", fd, nErrorMsg)
-					numOfBitsSet++
-				} else {
-					//log.Printf("(SCIONselect) exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
-					eset.Clr(fdPtr)
-					eIsSet = eset.IsSet(fdPtr)
-					//log.Printf("(SCIONselect) now it should be cleared: exceptfds=%v eIsSet=%v\n", exceptfds, eIsSet)
-				}
+			if readMsg+errorMsg > 0 {
+				log.Printf("(SCIONselect) ----> fd=%v: readMsg=%v errorMsg=%v", fdset.fd, readMsg, errorMsg)
 			}
+		}
 
-			//always clean them.... at the moment there is no write queue... or is there one?
-			if writefds != nil {
-				wset.Clr(fdPtr)
-			}
-
+		//blocking means no timeout. The ticker is just here to prevent a busyloop
+		if numOfBitsSet == 0 && (time.Since(start) < t || blocking) {
+			//Sleep
 			<-ticker
 			//log.Printf("(SCIONselect) received a tick.... starting over")
-
+		} else {
+			//we have at least 1 bit set and can return
+			break
 		}
 	}
 
 	if numOfBitsSet > 0 {
-		log.Printf("(SCIONselect) Returning because numOfBitsSet=%v", numOfBitsSet)
+		log.Printf("(SCIONselect) ----> Returning because numOfBitsSet=%v", numOfBitsSet)
 	} else {
-		log.Printf("(SCIONselect) Returning because of a timeout")
+		log.Printf("(SCIONselect) ----> Returning because of a timeout")
 	}
 
-	/*
-		//emulate select
-		fmt.Printf("Before calling select: readfds=%v\n", readfds)
-		n, err := syscall.Select(int(nfds),
-			(*syscall.FdSet)(unsafe.Pointer(readfds)),
-			(*syscall.FdSet)(unsafe.Pointer(writefds)),
-			(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
-			(*syscall.Timeval)(unsafe.Pointer(timeout)))
+	//Writting the result back into C's-Datastructures
+	for _, fdset := range fdsets {
 
-		fmt.Printf("After calling select: readfds=%v\n", readfds)
-	*/
+		var fdPtr uintptr
+		fdPtr = uintptr(fdset.fd)
 
-	/*
-		state, ok := fdstatus[fd]
-
-		if err == nil {
-			return C.int(n)
+		/*
+			the readfds has been given to select() => rset exists
+			for this fd is the flag is selected, => Ready flag has been manipulated
+			but it is not ready
+			=> we deactivate it
+		*/
+		if readfds != nil && fdset.readSelected && !fdset.readReady {
+			rset.Clr(fdPtr)
 		}
-	*/
+		if writefds != nil && fdset.writeSelected && !fdset.writeReady {
+			wset.Clr(fdPtr)
+		}
+		if exceptfds != nil && fdset.exceptSelected && !fdset.exceptReady {
+			eset.Clr(fdPtr)
+		}
+
+	}
+
 	return C.int(numOfBitsSet) //Todo err to errno?
 }
 
@@ -613,7 +688,7 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t 
 	}
 
 	if !fdstatus[fd].rcvLogicStarted {
-		log.Printf("(SCIONgosendmsg) Starting Rcv-Go-Routine")
+		log.Printf("(SCIONgosendmsg) Starting Rcv-Go-Routine !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 		s := fdstatus[fd]
 		s.rcvLogicStarted = true
 		fdstatus[fd] = s
@@ -830,9 +905,9 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 
 			//theoretisch gibt es hier mehrere
 			//msghdr.msg_iov.iov_base = sendMsgTS.payload
-			log.Printf("&msgvec[%d].msg_hdr=%v", i, msghdr)
-			log.Printf("msghdr.msg_iov.iov_len=%v", msghdr.msg_iov.iov_len)
-			log.Printf("msghdr.msg_iov.iov_base=%v", msghdr.msg_iov.iov_base)
+			log.Printf("(SCIONgorecvmmsg) ----> &msgvec[%d].msg_hdr=%v", i, msghdr)
+			log.Printf("(SCIONgorecvmmsg) ----> msghdr.msg_iov.iov_len=%v", msghdr.msg_iov.iov_len)
+			log.Printf("(SCIONgorecvmmsg) ----> msghdr.msg_iov.iov_base=%v", msghdr.msg_iov.iov_base)
 
 			/*
 				add the ntp packet
@@ -881,7 +956,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			}
 
 			msgvec[i].msg_len = C.uint(pktLen)
-			log.Printf("msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
+			log.Printf("(SCIONgorecvmmsg) ----> msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
 
 			/*
 				Add Ancillary data
@@ -894,7 +969,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			dataSize := unsafe.Sizeof(sendMsgTS.ts3)
 			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
 			msgControllen += cmsgSpace(C.size_t(dataSize))
-			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			log.Printf("(SCIONgorecvmmsg) ----> dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
 			//cmsg.cmsg_len = 64                  //unsigned long 8bytes
 			cmsg.cmsg_level = C.SOL_SOCKET      //int 4bytes
 			cmsg.cmsg_type = C.SCM_TIMESTAMPING //int 4bytes
@@ -905,8 +980,8 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			//habe sie beim erstellen entfernt
 			*(*C.struct_scm_timestamping)(unsafe.Pointer(cmsgDataPtr)) = sendMsgTS.ts3
 
-			log.Printf("cmsg.cmsg_len-TYPE = %T", cmsg.cmsg_len)
-			log.Printf("cmsg.cmsg_level-TYPE = %T", cmsg.cmsg_level)
+			log.Printf("(SCIONgorecvmmsg) ----> cmsg.cmsg_len-TYPE = %T", cmsg.cmsg_len)
+			log.Printf("(SCIONgorecvmmsg) ----> cmsg.cmsg_level-TYPE = %T", cmsg.cmsg_level)
 
 			//ADD IP_PKTINFO
 			cmsg = cmsgNextHdr(msghdr, cmsg)
@@ -914,7 +989,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			dataSize = unsafe.Sizeof(iDontWantThis)
 			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
 			msgControllen += cmsgSpace(C.size_t(dataSize))
-			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			log.Printf("(SCIONgorecvmmsg) ----> dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
 			//cmsg.cmsg_len = 28
 			cmsg.cmsg_level = C.IPPROTO_IP
 			cmsg.cmsg_type = C.IP_PKTINFO
@@ -952,7 +1027,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 		for i := 0; i < nMsg && i < int(vlen); i++ {
 			rcvMsgNTPTS := <-s.rcvQueueNTPTS
 			pld, _ := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
-			log.Printf("(SCIONgorecvmmsg) ----> rcvMsgNTPTS=%v", rcvMsgNTPTS)
+			//log.Printf("(SCIONgorecvmmsg) ----> rcvMsgNTPTS=%v", rcvMsgNTPTS)
 
 			//TODO C.VLEN should be variable i.e. equal to vlen
 			var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
@@ -972,13 +1047,13 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			//(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = srcIP
 			(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_port = C.htons(C.uint16_t(pld.SrcPort))
 
-			log.Printf("needed \t%v", C.htonl(173026688)) //10.80.45.128
-			log.Printf("having \t%v", srcIP)
+			log.Printf("(SCIONgorecvmmsg) ----> needed \t%v", C.htonl(173026688)) //10.80.45.128
+			log.Printf("(SCIONgorecvmmsg) ----> having \t%v", srcIP)
 
 			payload := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload).Payload
 			payloadLen := len(payload)
 			msgvec[i].msg_len = C.uint(payloadLen) //48? depends on extensions
-			log.Printf("msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
+			log.Printf("(SCIONgorecvmmsg) ----> msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
 			/*
 			   payloadLen := len(pld.Payload)
 			   ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
@@ -1012,7 +1087,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			dataSize := unsafe.Sizeof(tspktinfo)
 			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
 			msgControllen += cmsgSpace(C.size_t(dataSize))
-			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			log.Printf("(SCIONgorecvmmsg) ----> dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
 			//cmsg.cmsg_len = 32
 			cmsg.cmsg_level = C.SOL_SOCKET
 			cmsg.cmsg_type = C.SCM_TIMESTAMPING_PKTINFO
@@ -1025,7 +1100,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			dataSize = unsafe.Sizeof(rcvMsgNTPTS.ts3)
 			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
 			msgControllen += cmsgSpace(C.size_t(dataSize))
-			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			log.Printf("(SCIONgorecvmmsg) ----> dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
 			//cmsg.cmsg_len = 64
 			cmsg.cmsg_level = C.SOL_SOCKET
 			cmsg.cmsg_type = C.SCM_TIMESTAMPING
@@ -1038,7 +1113,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			dataSize = unsafe.Sizeof(iDontWantThis)
 			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
 			msgControllen += cmsgSpace(C.size_t(dataSize))
-			log.Printf("dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
+			log.Printf("(SCIONgorecvmmsg) ----> dataSize=%v cmsg.cmsg_len=%v msgControllen=%v", dataSize, cmsg.cmsg_len, msgControllen)
 			//cmsg.cmsg_len = 28
 			cmsg.cmsg_level = C.IPPROTO_IP
 			cmsg.cmsg_type = C.IP_PKTINFO
@@ -1064,7 +1139,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 		return C.int(updatedElemmsgvec)
 	}
 
-	log.Printf("(SCIONgorecvmmsg) Unimplemented/unknown case... returning no messages!!!!!!")
+	log.Printf("(SCIONgorecvmmsg) ----> Unimplemented/unknown case... returning no messages!!!!!!")
 	return C.int(updatedElemmsgvec)
 }
 

@@ -423,7 +423,7 @@ connect_ip_address(int sock_fd, IPSockAddr *addr)
   if (saddr_len == 0)
     return 0;
 
-  printf("&saddr=%p &saddr.sa=%p\n", &saddr, &saddr.sa);
+  //printf("&saddr=%p &saddr.sa=%p\n", &saddr, &saddr.sa);
   //if (connect(sock_fd, &saddr.sa, saddr_len) < 0 && errno != EINPROGRESS) { //mefi84 EINPROGRESS==Operation now in progress
   if (SCION_connect(sock_fd, &saddr.sa, saddr_len, addr) < 0 && errno != EINPROGRESS) { //mefi84 SCION
     DEBUG_LOG("Could not connect socket to %s : %s",

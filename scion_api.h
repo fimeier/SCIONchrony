@@ -108,6 +108,20 @@ extern int SCIONgosocket(int p0, int p1, int p2, fdInfoPtr p3);
 
 extern int SCIONgoclose(int p0);
 
+/*
+Optimierung nötig!!!!
+
+Warning: Chronyd is using select() as a timeout mechanism
+=> "Iff chrony is a client and plans to send a msg in 60sec, it will call select() with an appropriate timeout, return without any ready fd's and then check for sendtimeouts...."
+REMARK: At the moment there is no write-Queue => all Flags will be set to  zero if present
+	fmt.Printf("Before calling select: readfds=%v\n", readfds)
+	n, err := syscall.Select(int(nfds),
+		(*syscall.FdSet)(unsafe.Pointer(readfds)),
+		(*syscall.FdSet)(unsafe.Pointer(writefds)),
+		(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
+		(*syscall.Timeval)(unsafe.Pointer(timeout)))
+*/
+
 extern int SCIONselect(int p0, fdsetPtr p1, fdsetPtr p2, fdsetPtr p3, timevalPtr p4);
 
 extern ssize_t SCIONgosendmsg(int p0, msghdrConstPtr p1, int p2);

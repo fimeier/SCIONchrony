@@ -770,7 +770,6 @@ SCH_MainLoop(void)
     LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::While-Loop-Start..."); //mefi
     /* Dispatch timeouts and fill now with current raw time */
     dispatch_timeouts(&now);
-    LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::dispatch_timeouts(&now) returned..."); //mefi84
     saved_now = now;
     
     /* The timeout handlers may request quit */
@@ -831,9 +830,7 @@ SCH_MainLoop(void)
       }
     } else if (status > 0) {
       /* A file descriptor is ready for input or output */
-      LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::calling dispatch_filehandlers..."); //mefi84
       dispatch_filehandlers(status, p_read_fds, p_write_fds, p_except_fds);
-      LOG(LOGS_DEBUG, "mefi::SCH_MainLoop()::........dispatch_filehandlers returned"); //mefi84
     } else {
       /* No descriptors readable, timeout must have elapsed.
        Therefore, tv must be non-null */

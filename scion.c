@@ -135,7 +135,7 @@ void SCION_parse_source(char *line, char *type)
     }
 }
 
-void SCION_Initialise()
+void SCION_Initialise(void)
 {
     //memset(socked_mapping, 0, 1024 * sizeof(int)); //needed?
 
@@ -322,8 +322,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
 {
     DEBUG_LOG("Setting options fd=%d level=%d optname=%d", __fd, __level, __optname);
 
-    int scion_level;
-    int scion_optname;
+    int scion_level = SCION_LE_UNDEFINED;
+    int scion_optname = SCION_OPT_UNDEFINED;
 
     switch (__level)
     {
@@ -343,7 +343,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
             scion_optname = SCION_IP_FREEBIND;
             break;
         default:
-            DEBUG_LOG("\t\t optname = tbd");
+            DEBUG_LOG("\t\t optname = %d",__optname);
+            scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
         break;
@@ -376,15 +377,17 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
             scion_optname = SCION_SO_SELECT_ERR_QUEUE;
             break;
         default:
-            DEBUG_LOG("\t\t optname = tbd");
+             DEBUG_LOG("\t\t optname = %d",__optname);
+            scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
         break;
         /************************************************************/
 
     default:
-        DEBUG_LOG("\t\t level = tbd");
-        DEBUG_LOG("\t\t optname = tbd");
+        DEBUG_LOG("\t\t level = %d",__level);
+        DEBUG_LOG("\t\t optname = %d",__optname);
+        scion_optname = SCION_OPT_UNDEFINED;
         break;
     }
 
@@ -530,9 +533,9 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
 
         //TODO remove sendmsg()
         DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-        if (SENDNTPPERIP)
+        /* if (SENDNTPPERIP)
             status = sendmsg(__fd, __message, __flags);
-
+*/
         return status;
     }
 
@@ -602,8 +605,18 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
     int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
     int sendNTP = SCION_TYPE == SCION_IP_TX_NTP_MSG ? 1 : 0;
     int receiveNTP = SCION_TYPE == SCION_IP_RX_NTP_MSG ? 1 : 0;
-    DEBUG_LOG("Called with SCION_TYPE=%d => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
-
+    if (SCION_TYPE == SCION_IP_TX_ERR_MSG)
+    {
+        DEBUG_LOG("Called with SCION_TYPE=%d (getting Transmit-TS as error message) => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
+    }
+    if (SCION_TYPE == SCION_IP_TX_NTP_MSG)
+    {
+        DEBUG_LOG("Called with SCION_TYPE=%d (sending NTP packet) => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
+    }
+      if (SCION_TYPE == SCION_IP_RX_NTP_MSG)
+    {
+        DEBUG_LOG("Called with SCION_TYPE=%d (receiving NTP packet incl. TS's) => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
+    }
     for (int i = 0; i < n; i++)
     {
         struct msghdr *msg_hdr = &msgvec[i].msg_hdr;
@@ -645,7 +658,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
         {
             DEBUG_LOG("\t\t\t\t|-----> Printing vector=%d:", io);
             DEBUG_LOG("\t\t\t\t\t*iov_base=%p", msg_hdr->msg_iov[io].iov_base);
-            DEBUG_LOG("\t\t\t\t\tiov_len=%lu %s", msg_hdr->msg_iov[io].iov_len, dataEncapLayer2 ? "(HINWEIS: Ich vermute dies gibt primär die Grösse des Buffers an und hat nichts mit der grösse einer EMPFANGENEN Message zu tun. Insbesondere wird dieser Wert durch den caller nicht abgepasst)" : "");
+            DEBUG_LOG("\t\t\t\t\tiov_len=%lu %s", msg_hdr->msg_iov[io].iov_len, dataEncapLayer2 ? "(HINWEIS: Gibt die Grösse des Buffers an. Dieser Wert wird durch den caller nicht abgepasst)" : "");
         }
 
         /*       
@@ -671,7 +684,6 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
        */
         DEBUG_LOG("\t\t\t\tmsg_hdr->msg_control@%p", msg_hdr->msg_control);
         DEBUG_LOG("\t\t\t\tmsg_hdr->msg_controllen=%lu", msg_hdr->msg_controllen);
-
 
         struct cmsghdr *cmsg;
         for (cmsg = CMSG_FIRSTHDR(msg_hdr); cmsg; cmsg = CMSG_NXTHDR(msg_hdr, cmsg))
@@ -863,7 +875,7 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
 
     /*Receive up to VLEN messages as described by VMESSAGES from socket FD.
    Returns the number of messages received or -1 for errors.*/
-    int n;
+    int n = 0;
     //CHronyd acts as a Client
     if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
     {
@@ -876,7 +888,6 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
 
         n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over SCION connection", n);
-
 
         //TODO remove recvmmsg()
         /*DEBUG_LOG("TODO remove recvmmsg()!!!!");
