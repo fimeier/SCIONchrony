@@ -2,7 +2,7 @@
 
 #define MSGBUFFERSIZE 100
 
-#define GODEBUG2 1
+#define GODEBUG 1
 
 #define VLEN 16
 #define IOVLEN 1140

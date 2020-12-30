@@ -90,21 +90,15 @@ extern "C" {
 #endif
 
 
-// SetSciondAddr is a pretty cool function... would be even cooler without a line break :-(
-
-extern int SetSciondAddr(char* p0);
+// SetSciondAddr Sets the daemon address
+extern int SetSciondAddr(char* _sciondAddr);
 
 // SetLocalAddr registers Chrony's SCION address (ex: 1-ff00:0:112,10.80.45.83)
-
-extern int SetLocalAddr(char* p0);
-
-extern int SCIONgoconnect(int p0);
-
-extern int SCIONgosetsockopt(int p0);
-
-extern int SCIONgosocket(int p0, int p1, int p2, fdInfoPtr p3);
-
-extern int SCIONgoclose(int p0);
+extern int SetLocalAddr(char* _localAddr);
+extern int SCIONgoconnect(int _fd);
+extern int SCIONgosetsockopt(int _fd);
+extern int SCIONgosocket(int domain, int _type, int protocol, fdInfoPtr sinfo);
+extern int SCIONgoclose(int _fd);
 
 /*
 Optimierung nötig!!!!
@@ -119,14 +113,11 @@ REMARK: At the moment there is no write-Queue => all Flags will be set to  zero 
 		(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
 		(*syscall.Timeval)(unsafe.Pointer(timeout)))
 */
-
-extern int SCIONselect(int p0, fdsetPtr p1, fdsetPtr p2, fdsetPtr p3, timevalPtr p4);
-
-extern ssize_t SCIONgosendmsg(int p0, msghdrConstPtr p1, int p2);
+extern int SCIONselect(int nfds, fdsetPtr readfds, fdsetPtr writefds, fdsetPtr exceptfds, timevalPtr timeout);
+extern ssize_t SCIONgosendmsg(int _fd, msghdrConstPtr message, int flags);
 
 // SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff
-
-extern int SCIONgorecvmmsg(int p0, mmsghdrPtr p1, unsigned int p2, int p3, timespecPtr p4);
+extern int SCIONgorecvmmsg(int _fd, mmsghdrPtr vmessages, unsigned int vlen, int flags, timespecPtr tmo);
 
 #ifdef __cplusplus
 }

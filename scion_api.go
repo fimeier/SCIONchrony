@@ -32,7 +32,6 @@ import (
 
 	"github.com/scionproto/scion/go/lib/addr"
 	"github.com/scionproto/scion/go/lib/daemon"
-	"github.com/scionproto/scion/go/lib/sciond"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
 	"github.com/scionproto/scion/go/lib/sock/reliable/reconnect"
@@ -82,11 +81,12 @@ type FDSTATUS struct {
 	remoteAddress      string   //IP address
 	remoteAddressSCION string
 	rAddr              *snet.UDPAddr
-	sdc                sciond.Connector
+	sdc                daemon.Connector
 	pds                *snet.DefaultPacketDispatcherService
 	ps                 []snet.Path
 	selectedPath       snet.Path
 	ctx                context.Context
+	cancel             context.CancelFunc //defer cancel()
 	conn               snet.PacketConn
 	localPortSCION     uint16        //fix this: bzw vgl mit localAddr.Host.Port = 0 //ignore user defined srcport
 	connected          bool          //if set => SCIONgoconnect() finished without errors
@@ -165,14 +165,16 @@ func cancelled(done chan struct{}) bool {
 	}
 }
 
+var ctx context.Context
+
 func init() {
 	log.Printf("(Init) Changing logging behaviour....")
 
 	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.LUTC)
 
 	//bug in C.GODEBUG???... can't activate it anymore... always existing and zero..
-	//now for GODEBUGNEW
-	if C.GODEBUG2 == 0 {
+	//Use go clean --cache
+	if C.GODEBUG == 0 {
 		//if C.GODEBUGNEW == 0 {
 		log.Printf("(Init) log.* Output has been disabled as #define GODEBUGNEW 0 is set")
 		log.SetOutput(ioutil.Discard)
@@ -185,11 +187,12 @@ func init() {
 	localAddr, _ = snet.ParseUDPAddr(localAddrStr)
 	localAddr.Host.Port = 0 //ignore user defined srcport
 
+	ctx = context.Background()
 }
 
 var sciondAddr string
 
-// SetSciondAddr is a pretty cool function... would be even cooler without a line break :-(
+// SetSciondAddr Sets the daemon address
 //export SetSciondAddr
 func SetSciondAddr(_sciondAddr *C.char) C.int {
 	sciondAddr = C.GoString(C.charPtr(unsafe.Pointer(_sciondAddr)))
@@ -235,8 +238,10 @@ func SCIONgoconnect(_fd C.int) C.int {
 		return C.int(-1)
 	}
 
-	s.ctx = context.Background()
-	s.sdc, err = sciond.NewService(sciondAddr).Connect(s.ctx)
+	//s.ctx = context.Background()
+	s.ctx, s.cancel = context.WithCancel(ctx)
+
+	s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
 	if err != nil {
 		log.Printf("(SCIONgoconnect) Failed to create SCION connector:", err)
 		return C.int(-1)
@@ -244,11 +249,11 @@ func SCIONgoconnect(_fd C.int) C.int {
 	s.pds = &snet.DefaultPacketDispatcherService{
 		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
 		SCMPHandler: snet.DefaultSCMPHandler{
-			RevocationHandler: sciond.RevHandler{Connector: s.sdc},
+			RevocationHandler: daemon.RevHandler{Connector: s.sdc},
 		},
 	}
 
-	s.ps, err = s.sdc.Paths(s.ctx, s.rAddr.IA, localAddr.IA, sciond.PathReqFlags{Refresh: true})
+	s.ps, err = s.sdc.Paths(s.ctx, s.rAddr.IA, localAddr.IA, daemon.PathReqFlags{Refresh: true})
 	if err != nil {
 		log.Printf("(SCIONgoconnect) Failed to lookup core paths: %v:", err)
 		return C.int(-1)
@@ -293,60 +298,61 @@ func SCIONgoconnect(_fd C.int) C.int {
 
 func (s *FDSTATUS) rcvLogic() {
 	log.Printf("(rcvLogic fd=%v) Started", s.Fd)
-	/*for { replace return with continue... add timeout
-	if cancelled(s.doneRcv) {
-		log.Printf("(rcvLogic fd=%v) I have been cancelled. Returning.", s.Fd)
-		return
-	}*/
-
-	var rcvMsgNTPTS rcvMsgNTPTS
-
-	//var pkt snet.Packet
-	//var ov net.UDPAddr
-	//second := time.Now().Add(time.Second)
-	//s.conn.SetReadDeadline(second)
-	//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
-	err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
-	//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
-	if err != nil {
-		//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
-		return //continue
-	}
-	fakeHardwareRxTime := time.Now() //HW time komplett anders
-	fakeKernelRxTime := time.Now()   //HW time komplett anders
-	log.Printf("(rcvLogic fd=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
-
-	//var ts3 C.struct_scm_timestamping
-
-	if s.rxKERNELts {
-		rcvMsgNTPTS.tsType = tskernel
-		//kernel ts
-		rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(fakeKernelRxTime.Unix())
-		rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(fakeKernelRxTime.UnixNano() - fakeKernelRxTime.Unix()*1e9)
-	}
-
-	if s.rxHWts {
-		rcvMsgNTPTS.tsType = tshardware
-		if s.rxKERNELts {
-			rcvMsgNTPTS.tsType = tskernelhardware
+	for {
+		if cancelled(s.doneRcv) {
+			log.Printf("(rcvLogic fd=%v) I have been cancelled. Returning.", s.Fd)
+			break
 		}
-		//kernel ts
-		rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(fakeHardwareRxTime.Unix())
-		rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(fakeHardwareRxTime.UnixNano() - fakeHardwareRxTime.Unix()*1e9)
-	}
 
-	//Needed? If the payload can be extracted there should be a message
-	_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
-	if !ok {
-		return //continue
-	}
+		var rcvMsgNTPTS rcvMsgNTPTS
 
-	/* the only thing really important comes here.. */
-	log.Printf("(rcvLogic fd=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
-	s.rcvQueueNTPTS <- rcvMsgNTPTS
-	//}
+		//var pkt snet.Packet
+		//var ov net.UDPAddr
+		second := time.Now().Add(time.Second)
+		s.conn.SetReadDeadline(second)
+		//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
+		err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
+		//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
+		if err != nil {
+			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+			continue
+		}
+		fakeHardwareRxTime := time.Now() //HW time komplett anders
+		fakeKernelRxTime := time.Now()   //HW time komplett anders
+		log.Printf("(rcvLogic fd=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
+
+		//var ts3 C.struct_scm_timestamping
+
+		if s.rxKERNELts {
+			rcvMsgNTPTS.tsType = tskernel
+			//kernel ts
+			rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(fakeKernelRxTime.Unix())
+			rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(fakeKernelRxTime.UnixNano() - fakeKernelRxTime.Unix()*1e9)
+		}
+
+		if s.rxHWts {
+			rcvMsgNTPTS.tsType = tshardware
+			if s.rxKERNELts {
+				rcvMsgNTPTS.tsType = tskernelhardware
+			}
+			//kernel ts
+			rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(fakeHardwareRxTime.Unix())
+			rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(fakeHardwareRxTime.UnixNano() - fakeHardwareRxTime.Unix()*1e9)
+		}
+
+		//Needed? If the payload can be extracted there should be a message
+		_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+		if !ok {
+			continue //return //continue
+		}
+
+		/* the only thing really important comes here.. */
+		log.Printf("(rcvLogic fd=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
+		s.rcvQueueNTPTS <- rcvMsgNTPTS
+	}
 	s.rcvLogicStarted = false
 	log.Printf("(rcvLogic fd=%v) ----> Finished recv my message. Returning.", s.Fd)
+
 }
 
 //export SCIONgosetsockopt
@@ -437,6 +443,9 @@ func SCIONgoclose(_fd C.int) C.int {
 	}
 	//todo: what else needs to be done?
 
+	if s.cancel != nil {
+		s.cancel()
+	}
 	if s.sdc != nil {
 		//unklar ob dass alle connections killt... weil ich Backgroundcontext genommen habe,
 		s.sdc.Close(s.ctx)

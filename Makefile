@@ -81,6 +81,7 @@ clean :
 	-rm -f *.gcda *.gcno
 	-rm -rf .deps
 	-rm -rf *.dSYM
+	go clean --cache
 
 getdate.c : getdate.y
 	bison -o getdate.c getdate.y
