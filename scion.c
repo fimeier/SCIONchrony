@@ -21,6 +21,7 @@ void SCIONsetNtpPorts(int _ntpPort, int _cmdPort)
     commandPort = _cmdPort;
 }
 
+/*
 char *getClientSCIONAddress(char *address)
 { //TODO fix this ugly datastructure... or let it be :-)
     for (int i = 0; i < NUMMAPPINGS; i++)
@@ -38,7 +39,7 @@ char *getClientSCIONAddress(char *address)
     }
 
     return NULL;
-}
+}*/
 
 char *getNTPServerSCIONAddress(char *address)
 { //TODO fix this ugly datastructure
@@ -481,7 +482,8 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
     }
 
     //Todo: Decide if this is still needed
-    return bind(__fd, __addr, __len) + r;
+    //return bind(__fd, __addr, __len) + r;
+    return r;
 }
 
 int SCION_getsockopt(int __fd, int __level, int __optname, void *__restrict __optval, socklen_t *__restrict __optlen)
@@ -543,7 +545,7 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
     {
         DEBUG_LOG("\t|----> using SCION");
         DEBUG_LOG("\t|----> connected to %s i.e. %s\n", fdInfos[__fd]->remoteAddress, fdInfos[__fd]->remoteAddressSCION);
-        status = SCIONgosendmsg(__fd, __message, __flags);
+        status = SCIONgosendmsg(__fd, __message, __flags, NULL);
         DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
         //TODO remove sendmsg()
@@ -565,24 +567,25 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
             //TODO fix this ugly construct: depends on how the GO-Part registers the clients
             char remoteAddress[MAXADDRESSLENGTH] = ""; //initialization is needed!!!
             strcat(remoteAddress, inet_ntoa(((struct sockaddr_in *)__message->msg_name)->sin_addr));
-            /* TODO: Add port
+            // TODO: Add port
             strcat(remoteAddress, ":");
             char portAsStr[10];
             sprintf(portAsStr, "%u", ntohs(((struct sockaddr_in *)__message->msg_name)->sin_port));
             strcat(remoteAddress, portAsStr);
-            */
+            
             DEBUG_LOG("\t|----> sending to %s", remoteAddress);
 
-            char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
-            if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
+            //char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
+            //if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
+            if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
             {
-                DEBUG_LOG("\t|----> using SCION address %s", clientAsScionAddress);
-                status = SCIONgosendmsg(__fd, __message, __flags);
+                DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server");
+                status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress);
                 DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
                 //TODO remove sendmsg()
-                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-                status = sendmsg(__fd, __message, __flags);
+                //DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+                //status = sendmsg(__fd, __message, __flags);
 
                 return status;
             }
@@ -922,9 +925,10 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
 
         //TODO remove recvmmsg()
-        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        /*DEBUG_LOG("TODO remove recvmmsg()!!!!");
         n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
+        */
     }
     else
     {

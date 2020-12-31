@@ -6,7 +6,9 @@
 
 #define GODEBUG 1
 
-#define VLEN 16
+//#define MAX_RECV_MESSAGES 16
+#define VLEN 16 //corresponds to MAX_RECV_MESSAGES as defined in socket.c
+
 #define IOVLEN 1140
 
 #define IFINDEX 2 //solve this

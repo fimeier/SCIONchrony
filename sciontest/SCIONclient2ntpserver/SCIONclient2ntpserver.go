@@ -190,7 +190,7 @@ func main() {
 	flag.Parse()
 
 	fmt.Printf("sciond=%v\n", sciondAddr)
-	fmt.Printf("local=%#v\n", localAddr)
+	fmt.Printf("local=%v\n", localAddr)
 
 	runServer(sciondAddr, localAddr)
 }

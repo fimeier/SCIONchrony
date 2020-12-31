@@ -12,6 +12,7 @@
             "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/sciontest/SCIONclient2ntpserver/SCIONclient2ntpserver.go",
             "env": {},
             "args": ["-sciond=127.0.0.12:30255" ,"-local=1-ff00:0:110,10.80.45.83:11111"]
+            //./SCIONclient2ntpserver -sciond=127.0.0.12:30255 -local=1-ff00:0:110,10.80.45.83:11111
                                                         
         },
         {
@@ -21,7 +22,7 @@
             "mode": "auto",
             "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/sciontest/ntpclient2SCIONserver/ntpclient2SCIONserver.go",
             "env": {},
-            "args": ["-sciond=127.0.0.12:30255" ,"-local=1-ff00:0:110,10.80.45.83:33333"]
+            "args": ["-sciond=127.0.0.12:30255" ,"-local=1-ff00:0:110,10.80.45.83", "-scionChrony=1-ff00:0:112,10.80.45.83:123"]
                                                         
         },
         {

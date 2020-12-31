@@ -218,6 +218,8 @@ func SetLocalAddr(_localAddr *C.char) C.int {
 
 var fdstatus = make(map[int]FDSTATUS)
 
+var clientMapping = make(map[string](*snet.UDPAddr))
+
 var fdList = make(map[int]int)
 var maxFD = 1024
 
@@ -337,7 +339,9 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 
 	var err error
 
-	s.isNTPServer = true
+	if int(s.Sinfo.connectionType) == int(C.IS_NTP_SERVER) {
+		s.isNTPServer = true
+	}
 
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
@@ -359,7 +363,7 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 		log.Fatal("(SCIONgobind) Failed to parse local Address:", err)
 		return C.int(-1) //should never return
 	}
-	//bindAddr.Host.Port = port //set the correct port
+	bindAddr.Host.Port = port //set the correct port
 
 	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, bindAddr.IA, bindAddr.Host, addr.SvcNone)
 	if err != nil {
@@ -604,8 +608,6 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 	start := time.Now()
 	var tvsec C.__time_t
 	var tvusec C.__suseconds_t
-	tvsec = timeout.tv_sec
-	tvusec = timeout.tv_usec
 
 	highestFd := int(nfds) - 1
 
@@ -619,6 +621,8 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		tickTime = 500 * time.Millisecond
 		ticker = time.Tick(tickTime)
 	} else {
+		tvsec = timeout.tv_sec
+		tvusec = timeout.tv_usec
 		t = time.Duration(tvsec)*time.Second + time.Duration(tvusec)*time.Microsecond
 		tickTime = t / 20
 		ticker = time.Tick(tickTime)
@@ -761,7 +765,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 }
 
 //export SCIONgosendmsg
-func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t {
+func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAddrString *C.char) C.ssize_t {
 	fd := int(_fd)
 	_, exists := fdstatus[fd]
 	if !exists {
@@ -777,22 +781,21 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t 
 		go s.rcvLogic()
 	}
 
-	//s.remoteAddress = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddress)))
-	//s.remoteAddressSCION = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddressSCION)))
+	s := fdstatus[fd]
 
-	//msg := copyCstructMSGHDR(message)
 	msg := *(*syscall.Msghdr)(unsafe.Pointer(message))
-	//ntp := copyCstructNTP(msg.Iov)
 	ntp := *(*NTP_Packet)(unsafe.Pointer(msg.Iov.Base))
 
-	//fmt.Printf("msg = %v\n", msg)
-	log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, fdstatus[fd].remoteAddress, fdstatus[fd].remoteAddressSCION)
-	log.Printf("(SCIONgosendmsg)  \t|---->  fd=%v", fdstatus[fd].Fd)
-	log.Printf("(SCIONgosendmsg)  \t|---->  createTxTimestamp local=%v c-world=%v", fdstatus[fd].createTxTimestamp, fdstatus[fd].Sinfo.createTxTimestamp)
-	log.Printf("(SCIONgosendmsg)  \t|---->  createRxTimestamp local=%v c-world=%v", fdstatus[fd].createRxTimestamp, fdstatus[fd].Sinfo.createRxTimestamp)
+	var remoteAddrString string
+	if s.isNTPServer {
+		remoteAddrString = C.GoString(_remoteAddrString)
+		log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, remoteAddrString, "fake scion")
+	}
+	if s.connected {
+		log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, fdstatus[fd].remoteAddress, fdstatus[fd].remoteAddressSCION)
+	}
 
-	s := fdstatus[fd]
-	go s.sendmsgOverScion(msg.Iov)
+	go s.sendmsgOverScion(msg.Iov, remoteAddrString)
 
 	//if the call is blocking, this channel will get the value after msg has been sent
 	bytesSent := <-s.sent
@@ -800,7 +803,7 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int) C.ssize_t 
 
 }
 
-func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
+func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString string) {
 	log.Printf("(sendmsgOverScion fd=%v) Started", s.Fd)
 
 	nonblocking := int(s.Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK
@@ -809,6 +812,16 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec) {
 	var remoteAddr *snet.UDPAddr
 	if s.connected {
 		remoteAddr = s.rAddr
+	} else if s.isNTPServer {
+		//= make(map[string](*snet.UDPAddr))
+		//remoteAddrString := "fake me"
+		var exists bool
+		remoteAddr, exists = clientMapping[remoteAddrString]
+		if !exists {
+			log.Printf("(SCIONgosendmsg) Non-existing entry clientMapping[%v]", remoteAddrString)
+			s.sent <- int(-1)
+			return
+		}
 	} else {
 		log.Fatal("(sendmsgOverScion) Unconnected case needs to be implemended....")
 		s.sent <- int(-1)
@@ -948,7 +961,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 		receiveNTP = false
 		dataEncapLayer2 = true
 		returnTxTS = true
-	} else {
+	} else { //flags 0 => file input I guess
 		receiveFlag = int(C.SCION_FILE_INPUT)
 		receiveFlagStr = "C.SCION_FILE_INPUT"
 		scionType = int(C.SCION_IP_RX_NTP_MSG)
@@ -1108,7 +1121,12 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 		//log.Printf("(SCIONgorecvmmsg) Receive NTP packet needs to be implemented!!!!!!!!!!!!!!!!")
 		for i := 0; i < nMsg && i < int(vlen); i++ {
 			rcvMsgNTPTS := <-s.rcvQueueNTPTS
-			pld, _ := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+			pld, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+			if !ok {
+				log.Printf("(SCIONgorecvmmsg) ----> There was an error parsing the udp payload. Skipping this packet!")
+				continue
+			}
+
 			//log.Printf("(SCIONgorecvmmsg) ----> rcvMsgNTPTS=%v", rcvMsgNTPTS)
 
 			//TODO C.VLEN should be variable i.e. equal to vlen
@@ -1117,20 +1135,44 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			msghdr = &msgvec[i].msg_hdr
 			var msgControllen C.size_t
 
-			//Todo
-			/*
-			   msg_hdr.msg_namelen=16
-			   msg_hdr.msg_name (AF_INET) = 10.80.45.128:123*/
 			ipIP := rcvMsgNTPTS.pkt.Source.Host.IP().To4()
 			var srcIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(ipIP))
 			msghdr.msg_namelen = C.uint(16)
 			(*C.struct_sockaddr)(unsafe.Pointer(msghdr.msg_name)).sa_family = C.AF_INET
-			(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = C.htonl(173026688) //TODO: activate this value "srcIP" directly
-			//(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = srcIP
+			//(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = C.htonl(173026688) //TODO: NÖTIG FÜR FAKE INPUT activate this value "srcIP" directly
+			(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_addr.s_addr = srcIP
 			(*C.struct_sockaddr_in)(unsafe.Pointer(msghdr.msg_name)).sin_port = C.htons(C.uint16_t(pld.SrcPort))
 
-			log.Printf("(SCIONgorecvmmsg) ----> needed \t%v", C.htonl(173026688)) //10.80.45.128
-			log.Printf("(SCIONgorecvmmsg) ----> having \t%v", srcIP)
+			/* as Chrony-Scion NTP server we have to keep track of the sender */
+			if s.isNTPServer {
+
+				//Get some space? :-(
+				remoteAddr := &snet.UDPAddr{
+					NextHop: &net.UDPAddr{},
+					Host:    &net.UDPAddr{},
+				}
+
+				remoteAddr.Host.IP = rcvMsgNTPTS.pkt.Source.Host.IP()
+				remoteAddr.Host.Port = int(pld.SrcPort)
+
+				remoteAddr.IA = rcvMsgNTPTS.pkt.Source.IA
+
+				//use the same path back to the client
+				remoteAddr.Path = rcvMsgNTPTS.pkt.Path.Copy()
+				remoteAddr.Path.Reverse()
+				remoteAddr.NextHop = &rcvMsgNTPTS.ov
+
+				log.Printf("(SCIONgorecvmmsg) ----> remoteAddr.IA = %v", remoteAddr.IA)
+				log.Printf("(SCIONgorecvmmsg) ----> remoteAddr.Host = %v", remoteAddr.Host)
+				log.Printf("(SCIONgorecvmmsg) ----> remoteAddr.NextHop = %v", remoteAddr.NextHop)
+				log.Printf("(SCIONgorecvmmsg) ----> remoteAddr.Path = %v", remoteAddr.Path)
+
+				clientMapping[remoteAddr.Host.String()] = remoteAddr
+
+			}
+
+			//log.Printf("(SCIONgorecvmmsg) ----> needed \t%v", C.htonl(173026688)) //10.80.45.128
+			//log.Printf("(SCIONgorecvmmsg) ----> having \t%v", srcIP)
 
 			payload := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload).Payload
 			payloadLen := len(payload)

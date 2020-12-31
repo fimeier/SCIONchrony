@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/scionproto/scion/go/lib/addr"
+	"github.com/scionproto/scion/go/lib/daemon"
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
 	"github.com/scionproto/scion/go/lib/sock/reliable/reconnect"
@@ -55,37 +56,107 @@ func (h ntpHandler) Handle(pkt *snet.Packet) error {
 	return nil
 }
 
-func runServer(sciondAddr string, localAddr snet.UDPAddr) {
+func runServer(ctx context.Context, sciondAddr string, localAddr snet.UDPAddr, scionChrony snet.UDPAddr) {
 	var err error
-	ctx := context.Background()
 
-	fmt.Printf("sciondAddr = %v", sciondAddr)
-	fmt.Printf("localAddr = %v", localAddr)
+	/*
 
-	//var service sciond.Service
-	//service.Address = sciondAddr
+		SCION STUFF
 
-	//sdc, err := service.Connect(ctx)
+	*/
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
+	sdc, err := daemon.NewService(sciondAddr).Connect(ctx)
+	if err != nil {
+		log.Fatal("(SCIONgoconnect) Failed to create SCION connector:", err)
+	}
 	pds := &snet.DefaultPacketDispatcherService{
 		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
-		SCMPHandler: ntpHandler{ //wird nur aufgerufen wenn scmp erhalten wird
-			fdUnix: 42,
+		SCMPHandler: snet.DefaultSCMPHandler{
+			RevocationHandler: daemon.RevHandler{Connector: sdc},
 		},
 	}
 
-	conn, localPort, err := pds.Register(ctx, localAddr.IA, localAddr.Host, addr.SvcNone)
+	ps, err := sdc.Paths(ctx, scionChrony.IA, localAddr.IA, daemon.PathReqFlags{Refresh: true})
 	if err != nil {
-		log.Fatal("Failed to register server socket:", err)
+		log.Fatal("ailed to lookup core paths: %v:", err)
 	}
 
-	log.Printf("Listening in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, localPort, addr.SvcNone)
+	log.Printf("(SCIONgoconnect) Available paths to %v:\n", scionChrony.IA)
+	for _, p := range ps {
+		log.Printf("\t%v\n", p)
+	}
+
+	selectedPath := ps[0]
+	log.Printf("(SCIONgoconnect)  Selected path to %v: %v\n", scionChrony.IA, selectedPath)
+
+	scionChrony.Path = selectedPath.Path()
+	scionChrony.NextHop = selectedPath.UnderlayNextHop()
+
+	conn, localPortSCION, err := pds.Register(ctx, localAddr.IA, localAddr.Host, addr.SvcNone)
+	if err != nil {
+		log.Fatal("(SCIONgoconnect)  Failed to register client socket:", err)
+	}
+
+	/*
+
+		UDP stuff
+
+	*/
+	locAddrUDP, err := net.ResolveUDPAddr("udp", "10.80.45.83:123")
+	connUDP, err := net.ListenUDP("udp", locAddrUDP)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer connUDP.Close()
+
+	log.Printf("connUDP.Addr().String()=%v", connUDP.LocalAddr())
+
+	log.Printf("Listening in %v on %v:%d - %v\nand on 10.80.45.83:123 for incomming udp packets", localAddr.IA, localAddr.Host.IP, localPortSCION, addr.SvcNone)
 
 	for {
-		log.Printf("////////////////////////////////////////////////////// Step 1: receive ntp packet from chronyScion")
-		var pkt snet.Packet
-		var ov net.UDPAddr
-		err := conn.ReadFrom(&pkt, &ov)
+
+		log.Printf("////////////////////////////////////////////////////// Step 1: receive ntp packet as common UDP packet")
+		var buf [512]byte
+		n, udpCLientAddr, err := connUDP.ReadFromUDP(buf[0:])
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("\t----> n=%v bytes received using common udp connection\n", n)
+
+		log.Printf("////////////////////////////////////////////////////// Step 2: forward received ntp packet to chrony over SCION")
+
+		pkt := &snet.Packet{
+			PacketInfo: snet.PacketInfo{
+				Source: snet.SCIONAddress{
+					IA:   localAddr.IA,
+					Host: addr.HostFromIP(localAddr.Host.IP), //addr.HostFromIP(udpCLientAddr.IP), //forward the "IP": nop
+				},
+				Destination: snet.SCIONAddress{
+					IA:   scionChrony.IA,
+					Host: addr.HostFromIP(scionChrony.Host.IP),
+				},
+				Path: scionChrony.Path,
+				Payload: snet.UDPPayload{
+					SrcPort: localPortSCION, //uint16(udpCLientAddr.Port), //forward the PORT: nop geht nicht...
+					DstPort: uint16(scionChrony.Host.Port),
+					Payload: buf[0:n],
+				},
+			},
+		}
+
+		log.Printf("\t----> Forwarding UDP Message over SCION to Chrony-Scion")
+
+		err = conn.WriteTo(pkt, scionChrony.NextHop)
+		if err != nil {
+			log.Printf("\t---->[%d] Failed to write packet: %v\n", err)
+		}
+
+		log.Printf("////////////////////////////////////////////////////// Step 3: receive response from chronyScion")
+		var pktResponse snet.Packet
+		var ovResponse net.UDPAddr
+		err = conn.ReadFrom(&pktResponse, &ovResponse)
 		if err != nil {
 			log.Printf("\t---->Failed to read packet: %v\n", err)
 			continue
@@ -97,7 +168,7 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 		}
 
 		payload := pld.Payload
-		fmt.Printf("\t---->Received payload: \"%v\"\n", payload)
+		fmt.Printf("\t----> Received payload from Chrony-Scion: \"%v\"\n", payload)
 
 		payloadLen := len(payload)
 		ntpSize := int(unsafe.Sizeof(NTP_Packet{})) //minimum size header 48 bytes???
@@ -116,68 +187,12 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 		// if C.free is needed).
 		ntpHeap := C.CBytes(payload)
 		ntp := *(*NTP_Packet)(ntpHeap)
-		fmt.Printf("\t---->ntp = %v\n", ntp)
+		fmt.Printf("\t ----> Printing the ntp before forwarding it = %v\n", ntp)
 		C.free(ntpHeap)
 
-		log.Printf("////////////////////////////////////////////////////// Step 2: forward ntp packet as common UDP packet to ntp server")
-		connUDP, err := net.Dial("udp", "10.80.45.128:123")
-
-		defer connUDP.Close()
-		n, err := connUDP.Write(payload)
-		fmt.Printf("\t---->n=%v bytes sent using common udp connection\n", n)
-
-		log.Printf("////////////////////////////////////////////////////// Step 3: receive ntp packet response as common UDP packet")
-		var buf [512]byte
-		n, err = connUDP.Read(buf[0:])
-		if err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("\t---->n=%v bytes received using common udp connection\n", n)
-		//adhoc security.... improve this
-		if n < ntpSize {
-			fmt.Printf("\t---->payload can't be a NTP packet (%d < %d)\n", n, ntpSize)
-			continue
-		}
-		//data leakage? JOP
-		ntpHeap = C.CBytes(buf[0:n])
-		ntp = *(*NTP_Packet)(ntpHeap)
-		fmt.Printf("\t---->ntp = %v\n", ntp)
-		C.free(ntpHeap)
-
-		log.Printf("////////////////////////////////////////////////////// Step 4: forward received ntp packet to chrony over SCION")
-
-		/* get reverse path */
-		reversePath := pkt.Path.Copy()
-		reversePath.Reverse()
-		reversePathUnderlayNextHop := &ov
-		//reversePathUnderlayNextHop.Port = 666
-
-		pktResponse := &snet.Packet{
-			PacketInfo: snet.PacketInfo{
-				Source: snet.SCIONAddress{
-					IA:   localAddr.IA,
-					Host: addr.HostFromIP(localAddr.Host.IP),
-				},
-				Destination: snet.SCIONAddress{
-					IA:   pkt.Source.IA,
-					Host: addr.HostFromIP(pkt.Source.Host.IP()),
-				},
-				Path: reversePath, //sp.Path(),
-				Payload: snet.UDPPayload{
-					SrcPort: 123, //localPort, muss so sein da ich die Messages ja weiterleite....
-					DstPort: uint16(pld.SrcPort),
-					Payload: buf[0:n],
-				},
-			},
-		}
-
-		log.Printf("\t---->Sending in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, localPort, addr.SvcNone)
-		log.Printf(".\t---->.......Destination:  IP:Port ist in %v on %v:%d - %v\n", pkt.Source.IA, pkt.Source.Host.IP(), pld.SrcPort, addr.SvcNone)
-
-		err = conn.WriteTo(pktResponse, reversePathUnderlayNextHop) //sp.UnderlayNextHop())
-		if err != nil {
-			log.Printf("\t---->[%d] Failed to write packet: %v\n", err)
-		}
+		log.Printf("////////////////////////////////////////////////////// Step 4: forward ntp packet as common UDP packet to ntp server")
+		n, err = connUDP.WriteToUDP(payload, udpCLientAddr)
+		fmt.Printf("\t---->n =%v bytes sent using common udp connection FALSCH FEHLT JA ZIELPORT!!!!\n", n)
 
 	}
 }
@@ -185,12 +200,16 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 func main() {
 	var sciondAddr string
 	var localAddr snet.UDPAddr
+	var scionChrony snet.UDPAddr
 	flag.StringVar(&sciondAddr, "sciond", "", "SCIOND address")
 	flag.Var(&localAddr, "local", "Local address")
+	flag.Var(&scionChrony, "scionChrony", "The Scion Address of the NTP Chronyd")
+
 	flag.Parse()
 
 	fmt.Printf("sciond=%v\n", sciondAddr)
-	fmt.Printf("local=%#v\n", localAddr)
+	fmt.Printf("local=%v\n", localAddr)
+	fmt.Printf("scionChrony=%v\n", scionChrony)
 
-	runServer(sciondAddr, localAddr)
+	runServer(context.Background(), sciondAddr, localAddr, scionChrony)
 }
