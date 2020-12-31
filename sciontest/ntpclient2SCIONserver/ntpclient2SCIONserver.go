@@ -161,7 +161,7 @@ func runServer(ctx context.Context, sciondAddr string, localAddr snet.UDPAddr, s
 			log.Printf("\t---->Failed to read packet: %v\n", err)
 			continue
 		}
-		pld, ok := pkt.Payload.(snet.UDPPayload)
+		pld, ok := pktResponse.Payload.(snet.UDPPayload)
 		if !ok {
 			log.Printf("\t---->Failed to read packet payload\n")
 			continue

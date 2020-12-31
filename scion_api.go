@@ -625,6 +625,9 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		tvusec = timeout.tv_usec
 		t = time.Duration(tvsec)*time.Second + time.Duration(tvusec)*time.Microsecond
 		tickTime = t / 20
+		if tickTime > 500*time.Millisecond {
+			tickTime = time.Millisecond
+		}
 		ticker = time.Tick(tickTime)
 	}
 
