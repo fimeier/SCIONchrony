@@ -577,6 +577,9 @@ int main
       CNF_ParseLine(NULL, config_args + optind - argc + 1, argv[optind]);
   }
 
+  /* Workaround->fix linker: Let SCION access some static values */
+  SCIONsetNtpPorts(CNF_GetNTPPort(), CNF_GetCommandPort());
+
   if (print_config)
     return 0;
 

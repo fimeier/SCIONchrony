@@ -12,6 +12,15 @@ static fdInfo *fdInfos[1024];
 static addressMapping *ntpServers[NUMMAPPINGS];
 static addressMapping *ntpClients[NUMMAPPINGS];
 
+static int ntpPort = NTP_PORT;
+static int commandPort = DEFAULT_CANDM_PORT;
+
+void SCIONsetNtpPorts(int _ntpPort, int _cmdPort)
+{
+    ntpPort = _ntpPort;
+    commandPort = _cmdPort;
+}
+
 char *getClientSCIONAddress(char *address)
 { //TODO fix this ugly datastructure... or let it be :-)
     for (int i = 0; i < NUMMAPPINGS; i++)
@@ -137,6 +146,9 @@ void SCION_parse_source(char *line, char *type)
 
 void SCION_Initialise(void)
 {
+    //start the receive logic for the ntp server: at this moment all socket options should be set
+    SCIONstartntp();
+
     //memset(socked_mapping, 0, 1024 * sizeof(int)); //needed?
 
     //workaround... fix this ugly construct
@@ -335,7 +347,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
             scion_optname = SCION_IP_FREEBIND;
             break;
         default:
-            DEBUG_LOG("----> optname = %d",__optname);
+            DEBUG_LOG("----> optname = %d", __optname);
             scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
@@ -369,7 +381,7 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
             scion_optname = SCION_SO_SELECT_ERR_QUEUE;
             break;
         default:
-             DEBUG_LOG("----> optname = %d",__optname);
+            DEBUG_LOG("----> optname = %d", __optname);
             scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
@@ -377,8 +389,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     default:
-        DEBUG_LOG("----> level = %d",__level);
-        DEBUG_LOG("----> optname = %d",__optname);
+        DEBUG_LOG("----> level = %d", __level);
+        DEBUG_LOG("----> optname = %d", __optname);
         scion_optname = SCION_OPT_UNDEFINED;
         break;
     }
@@ -442,15 +454,25 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
 {
     DEBUG_LOG("Binding fd=%d", __fd);
 
+    int r = 0;
+
     if (fdInfos[__fd] != NULL) //should always be true
     {
-        fdInfo *fdi = fdInfos[__fd]; //hier wird es vermutlich auch jeweils überschrieben
+        fdInfo *fdi = fdInfos[__fd];
         SCK_SockaddrToIPSockAddr(__addr, __len, &fdi->boundTo);
         DEBUG_LOG("\t|---->%s", UTI_IPSockAddrToString(&fdi->boundTo));
 
-        if (fdi->boundTo.port == NTP_PORT)
+        if (fdi->boundTo.port == ntpPort)
         {
+            DEBUG_LOG("\t|----> calling SCIONgobind() as this is is Chrony's NTP-Server Socket");
             fdi->connectionType = IS_NTP_SERVER;
+            r = SCIONgobind(__fd, fdi->boundTo.port);
+            DEBUG_LOG("\t|----> SCIONgobind() return-state: %d", r);
+        }
+        else if (fdi->boundTo.port == commandPort)
+        {
+            DEBUG_LOG("\t|----> NOT calling SCIONgobind() as this is is Chrony's Command Socket");
+            fdi->connectionType = IS_CMD_SOCKET;
         }
     }
     else
@@ -458,7 +480,8 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
         DEBUG_LOG("nonexisting fdInfo: cannot add informations");
     }
 
-    return bind(__fd, __addr, __len);
+    //Todo: Decide if this is still needed
+    return bind(__fd, __addr, __len) + r;
 }
 
 int SCION_getsockopt(int __fd, int __level, int __optname, void *__restrict __optval, socklen_t *__restrict __optlen)
@@ -605,7 +628,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
     {
         DEBUG_LOG("Called with SCION_TYPE=%d (sending NTP packet) => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
     }
-      if (SCION_TYPE == SCION_IP_RX_NTP_MSG)
+    if (SCION_TYPE == SCION_IP_RX_NTP_MSG)
     {
         DEBUG_LOG("Called with SCION_TYPE=%d (receiving NTP packet incl. TS's) => ntp data pointed to by *iov_base is assumed to be in a %s", SCION_TYPE, dataEncapLayer2 ? "layer 2 packet" : "NTP_Packet struct");
     }

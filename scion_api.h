@@ -95,8 +95,24 @@ extern int SetSciondAddr(char* _sciondAddr);
 
 // SetLocalAddr registers Chrony's SCION address (ex: 1-ff00:0:112,10.80.45.83)
 extern int SetLocalAddr(char* _localAddr);
+
+//SCIONgoconnect creates the needed objects to call/recv data from a scion connections.
+//Attention: This doesn't start a receive method!
+//The send ntp packets as a client: call socket(), connect(), setsockopt(), send*(), *will also start receive method
 extern int SCIONgoconnect(int _fd);
+
+//SCIONgobind Used to start recv Logic: now all socket options should be set
+extern int SCIONstartntp();
+
+//SCIONgobind tbd....
+extern int SCIONgobind(int _fd, uint16_t _port);
+
+//SCIONgosetsockopt gets called each time a setsockopt() is executed.
+//Settings are encoded inside of Sinfo. Some of the options are explicitely set in go's memory (redundant).
 extern int SCIONgosetsockopt(int _fd);
+
+//SCIONgosocket creates the needed datastructure to keep state in the SCION-GO-World.
+//sinfo is a pointer into C's memory.
 extern int SCIONgosocket(int domain, int _type, int protocol, fdInfoPtr sinfo);
 extern int SCIONgoclose(int _fd);
 

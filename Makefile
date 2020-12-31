@@ -61,7 +61,8 @@ all : go chronyd chronyc
 
 go : 
 	go build -buildmode=c-shared -o scion_api.so *.go
-	go build sciontest/ntpscionendpoint.go
+	go build sciontest/SCIONclient2ntpserver/SCIONclient2ntpserver.go
+	go build sciontest/ntpclient2SCIONserver/ntpclient2SCIONserver.go
 
 chronyd : $(OBJS)
 	$(CC) $(CFLAGS) -o chronyd $(OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_LIBS) $(EXTRA_LIBS_SCION)

@@ -100,6 +100,8 @@ type FDSTATUS struct {
 	createRxTimestamp  bool //TODO Adapt logig for recv (started after connect, but before setsockopts..)
 	rxKERNELts         bool //use this
 	rxHWts             bool //use this
+	isNTPServer        bool
+	isbound            bool
 }
 
 type rcvMsgNTPTS struct {
@@ -209,6 +211,7 @@ func SetLocalAddr(_localAddr *C.char) C.int {
 	localAddrStr = C.GoString(C.charPtr(unsafe.Pointer(_localAddr)))
 	log.Printf("(SetLocalAddr) Setting localAddr = %v", localAddrStr)
 	localAddr, _ = snet.ParseUDPAddr(localAddrStr)
+	//TODO add err
 	localAddr.Host.Port = 0 //ignore user defined srcport
 	return C.int(1)
 }
@@ -218,6 +221,9 @@ var fdstatus = make(map[int]FDSTATUS)
 var fdList = make(map[int]int)
 var maxFD = 1024
 
+//SCIONgoconnect creates the needed objects to call/recv data from a scion connections.
+//Attention: This doesn't start a receive method!
+//The send ntp packets as a client: call socket(), connect(), setsockopt(), send*(), *will also start receive method
 //export SCIONgoconnect
 func SCIONgoconnect(_fd C.int) C.int {
 	fd := int(_fd)
@@ -296,6 +302,90 @@ func SCIONgoconnect(_fd C.int) C.int {
 	return C.int(0) //TODO -1 for errors
 }
 
+//SCIONgobind Used to start recv Logic: now all socket options should be set
+//export SCIONstartntp
+func SCIONstartntp() C.int {
+	for _, s := range fdstatus {
+		if s.isbound {
+			if !s.rcvLogicStarted {
+				log.Printf("(SCIONstartntp) Starting Rcv-Go-Routine for fd=%v!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
+				//s := fdstatus[fd]
+				s.rcvLogicStarted = true
+				fdstatus[s.Fd] = s
+				hallo := fdstatus[s.Fd]
+				log.Printf("(SCIONstartntp) Starting Rcv-Go-Routine for fd=%v", hallo.Fd)
+
+				go hallo.rcvLogic()
+			}
+
+		}
+	}
+	return C.int(0)
+}
+
+//SCIONgobind tbd....
+//export SCIONgobind
+func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
+	fd := int(_fd)
+	s, exists := fdstatus[fd]
+	if !exists {
+		log.Printf("(SCIONgobind) There is no state available for fd=%d\n", fd)
+		return C.int(-1)
+	}
+
+	port := int(_port)
+
+	var err error
+
+	s.isNTPServer = true
+
+	s.ctx, s.cancel = context.WithCancel(ctx)
+
+	s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
+	if err != nil {
+		log.Printf("(SCIONgobind) Failed to create SCION connector:", err)
+		return C.int(-1)
+	}
+	s.pds = &snet.DefaultPacketDispatcherService{
+		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
+		SCMPHandler: snet.DefaultSCMPHandler{
+			RevocationHandler: daemon.RevHandler{Connector: s.sdc},
+		},
+	}
+
+	//
+	bindAddr, err := snet.ParseUDPAddr(localAddrStr)
+	if err != nil {
+		log.Fatal("(SCIONgobind) Failed to parse local Address:", err)
+		return C.int(-1) //should never return
+	}
+	//bindAddr.Host.Port = port //set the correct port
+
+	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, bindAddr.IA, bindAddr.Host, addr.SvcNone)
+	if err != nil {
+		log.Printf("(SCIONgobind)  Failed to register client socket:", err)
+		return C.int(-1)
+	}
+
+	log.Printf("localAddr.IA=%v, localAddr.Host=%v", localAddr.IA, localAddr.Host)
+	log.Printf("bindAddr.IA=%v, bindAddr.Host=%v", bindAddr.IA, bindAddr.Host)
+
+	s.isbound = true
+	s.sent = make(chan int)
+	s.doneRcv = make(chan struct{})
+	s.rcvQueueNTPTS = make(chan rcvMsgNTPTS, int(C.MSGBUFFERSIZESERVER))
+	s.sendQueueTS = make(chan sendMsgTS, int(C.MSGBUFFERSIZESERVER))
+
+	fdstatus[fd] = s //store it back
+	log.Printf("(SCIONgobind) Registered Port %v for fd=%v. rcvLogic() not started!", port, fd)
+
+	//TODO: ACHTUNG SETTINGS sockopt sind hier nicht gesetzt
+	//log.Printf("(SCIONgobind) Starting Rcv-Go-Routine")
+	//go s.rcvLogic() //bei send drin...
+
+	return C.int(0) //TODO -1 for errors
+}
+
 func (s *FDSTATUS) rcvLogic() {
 	log.Printf("(rcvLogic fd=%v) Started", s.Fd)
 	for {
@@ -355,6 +445,8 @@ func (s *FDSTATUS) rcvLogic() {
 
 }
 
+//SCIONgosetsockopt gets called each time a setsockopt() is executed.
+//Settings are encoded inside of Sinfo. Some of the options are explicitely set in go's memory (redundant).
 //export SCIONgosetsockopt
 func SCIONgosetsockopt(_fd C.int) C.int {
 	fd := int(_fd)
@@ -385,6 +477,8 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 	return C.int(0)
 }
 
+//SCIONgosocket creates the needed datastructure to keep state in the SCION-GO-World.
+//sinfo is a pointer into C's memory.
 //export SCIONgosocket
 func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr) C.int {
 	fd := int(sinfo.fd)

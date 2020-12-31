@@ -5,74 +5,24 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "ntpscionendpoint",
+            "name": "out: SCION-client -> ntpserver",
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/sciontest/ntpscionendpoint.go",
+            "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/sciontest/SCIONclient2ntpserver/SCIONclient2ntpserver.go",
             "env": {},
             "args": ["-sciond=127.0.0.12:30255" ,"-local=1-ff00:0:110,10.80.45.83:11111"]
                                                         
         },
         {
-            "name": "pingChrony GO",
+            "name": "in: ntp-client -> SCION-server",
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/scion_api.go",
+            "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/sciontest/ntpclient2SCIONserver/ntpclient2SCIONserver.go",
             "env": {},
-            "args": [""]
+            "args": ["-sciond=127.0.0.12:30255" ,"-local=1-ff00:0:110,10.80.45.83:33333"]
                                                         
-        },
-        {
-            "name": "pingSCION GO",
-            "type": "go",
-            "request": "launch",
-            "mode": "auto",
-            "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/scionproto/go/scion/",
-            "env": {},
-            "args": ["ping", "1-ff00:0:110,10.80.45.83"]
-                                                        
-        },
-        {
-            "name": "scmpSCION(scionlab) GO",
-            "type": "go",
-            "request": "launch",
-            "mode": "auto",
-            "program": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/scion/go/tools/scmp/main.go",
-            "env": {},
-            "args": ["echo", "-remote", "17-ffaa:1:dd0,[10.80.45.83]"]
-                                                        
-        },
-        {
-            "name": "Debug chrony test",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${fileDirname}/chronyd",
-            //ACHTUNG: Ein Space bei "-f Filename" wird nicht entfernt und daher falsch interpretiert
-            //sudo ./chronyd -P 0 -4 -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyClientUbuntuP52.conf
-            //sudo ./chronyd -P 0 -4 -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyClientUbuntuBernina.conf
-            //sudo ./chronyd -P 0 -4 -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyUbuntuBernina.conf
-            //sudo ./chronyd -P 0 -4 -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuBernina.conf
-            //sudo ./chronyd -P 0 -4 -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf
-
-            //"args": ["-P 0","-4","-Q","-d", "-x", "-U", "-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chrony.conf"],
-            "args": ["-P 0","-4","-d", "-x", "-U","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf"],
-
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                }
-            ],
-            "miDebuggerPath": "/usr/bin/gdb",
-            "preLaunchTask": "my make",             
         },
         {
             "name": "Debug chrony as ROOT",

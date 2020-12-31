@@ -1,6 +1,8 @@
 #define SENDNTPPERIP 1
 
 #define MSGBUFFERSIZE 100
+#define MSGBUFFERSIZESERVER 1000
+
 
 #define GODEBUG 1
 
@@ -65,7 +67,7 @@
 #include "scion_api.h"
 #endif
 
-#define NTP_PORT 123
+//#define NTP_PORT 123
 
 #define MAXADDRESSLENGTH 100
 #define MAXMESSAGESIZE 1200
@@ -111,7 +113,8 @@ typedef enum
 {
    NOT_CONNECTED = 0,
    CONNECTED_TO_NTP_SERVER,
-   IS_NTP_SERVER,
+   IS_NTP_SERVER, //a socket to receive ntp packets as an NTP-Server (ChronyD acts as server)
+   IS_CMD_SOCKET //a socket to receive cmd's from chronyC
 } SCION_CONNECTION_TYPE; //rename this
 
 typedef struct fdInfo
@@ -140,6 +143,9 @@ typedef struct addressMapping
 void SCION_Initialise(void);
 
 void SCION_parse_source(char *line, char *type);
+
+void SCIONsetNtpPorts(int _ntpPort, int _cmdPort);
+
 
 /* Socket Operations */
 
