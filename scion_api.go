@@ -626,7 +626,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		t = time.Duration(tvsec)*time.Second + time.Duration(tvusec)*time.Microsecond
 		tickTime = t / 20
 		if tickTime > 500*time.Millisecond {
-			tickTime = time.Millisecond
+			tickTime = 500 * time.Millisecond
 		}
 		ticker = time.Tick(tickTime)
 	}
@@ -989,14 +989,32 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 		//TODO Länge der Daten setzen..
 		for i := 0; i < nErrorMsg && i < int(vlen); i++ {
 			sendMsgTS := <-s.sendQueueTS
-			payloadMsg := sendMsgTS.pkt.Payload.(snet.UDPPayload).Payload
+			pld, ok := sendMsgTS.pkt.Payload.(snet.UDPPayload)
+			if !ok {
+				log.Printf("(SCIONgorecvmmsg) ----> There was an error parsing the udp payload. Skipping this packet!")
+				continue
+			}
+			payloadMsg := pld.Payload
 			log.Printf("(SCIONgorecvmmsg) ----> sendMsgTS=%v", sendMsgTS)
 
 			//TODO C.VLEN should be variable i.e. equal to vlen
 			var msgvec *([C.VLEN]C.struct_mmsghdr) = (*[C.VLEN]C.struct_mmsghdr)(unsafe.Pointer(vmessages))
 			var msghdr *C.struct_msghdr
 			msghdr = &msgvec[i].msg_hdr
-			var msgControllen C.size_t
+			var msgControllen C.size_t //keep track off added data
+
+			//Buffer löschen????
+			var msgContrLen int
+			msgContrLen = int(msghdr.msg_controllen)
+			log.Printf("(SCIONgorecvmmsg) ----> msghdr.msg_control=%v msghdr.msg_controllen=%v msgContrLen=%v", msghdr.msg_control, msghdr.msg_controllen, msgContrLen)
+
+			//chang this: What we need is msgContrLen. Reason: cmsgNextHdr fails if memory is not nulled
+			var bufferPtrDelete *([256]C.char)
+			bufferPtrDelete = (*([256]C.char))(msghdr.msg_control)
+			log.Printf("%v", bufferPtrDelete)
+			for i := 0; i < 256 && i < msgContrLen; i++ {
+				bufferPtrDelete[i] = 0x00
+			}
 
 			msghdr.msg_namelen = C.uint(0)
 			//msghdr.msg_name is null
@@ -1035,14 +1053,25 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			ihl = int((bufferPtr[offsetNTP] & 0xf) * 4) //==20 for ipv4
 
 			bufferPtr[offsetNTP+9] = 17
-			//ipv4 in network byte order
-			bufferPtr[offsetNTP+16] = 10
-			bufferPtr[offsetNTP+17] = 80
-			bufferPtr[offsetNTP+18] = 45
-			bufferPtr[offsetNTP+19] = -128
+
+			//ipv4 in network byte order: THIS should be THE Destination IP and Port
+			/*
+				bufferPtr[offsetNTP+16] = 10
+				bufferPtr[offsetNTP+17] = 80
+				bufferPtr[offsetNTP+18] = 45
+				bufferPtr[offsetNTP+19] = -128
+			*/
+			dstipIPTest := sendMsgTS.pkt.Destination.Host.IP().To4()
+			var dstIPTest C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(dstipIPTest))
+			//writes destIp in network byte order into bufferPtr[offsetNTP+16]-bufferPtr[offsetNTP+19]
+			*(*C.uint32_t)(unsafe.Pointer(&bufferPtr[offsetNTP+16])) = dstIPTest
+
 			//port in network byte order
 			bufferPtr[offsetNTP+ihl+2] = 0   //shoud be [22]
 			bufferPtr[offsetNTP+ihl+3] = 123 //shoud be [23]
+			//var dstPort C.uint16_t
+			//dstPort = *(*C.uint16_t)(unsafe.Pointer(&bufferPtr[offsetNTP+ihl+2]))
+			*(*C.uint16_t)(unsafe.Pointer(&bufferPtr[offsetNTP+ihl+2])) = C.htons(C.uint16_t(pld.DstPort))
 
 			offsetNTP += ihl + 8 //should be 42
 			pktLen += ihl + 8    //should be 90
@@ -1057,8 +1086,20 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			log.Printf("(SCIONgorecvmmsg) ----> msgvec[%d].msg_len=%v", i, msgvec[i].msg_len)
 
 			/*
-				Add Ancillary data
+								Add Ancillary data
+
+								To create ancillary data, first initialize the msg_controllen
+				       member of the msghdr with the length of the control message
+				       buffer.  Use CMSG_FIRSTHDR() on the msghdr to get the first
+				       control message and CMSG_NXTHDR() to get all subsequent ones.  In
+				       each control message, initialize cmsg_len (with CMSG_LEN()), the
+				       other cmsghdr header fields, and the data portion using
+				       CMSG_DATA().  Finally, the msg_controllen field of the msghdr
+				       should be set to the sum of the CMSG_SPACE() of the length of all
+				       control messages in the buffer.  For more information on the
+				       msghdr, see recvmsg(2).
 			*/
+
 			var cmsg *C.struct_cmsghdr
 			var cmsgDataPtr *C.uchar
 
@@ -1076,10 +1117,11 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			//ACHTUNG: Kopiere hier Kernel und HW rein... unklar ob Chrony logik damit klarkommt
 			//====> nein verwirft dann beide TS wenn HW "ungültig ist"
 			//habe sie beim erstellen entfernt
+			//Allenfalls sollte man hier memcpy() nehmen.....
 			*(*C.struct_scm_timestamping)(unsafe.Pointer(cmsgDataPtr)) = sendMsgTS.ts3
 
-			log.Printf("(SCIONgorecvmmsg) ----> cmsg.cmsg_len-TYPE = %T", cmsg.cmsg_len)
-			log.Printf("(SCIONgorecvmmsg) ----> cmsg.cmsg_level-TYPE = %T", cmsg.cmsg_level)
+			log.Printf("(SCIONgorecvmmsg) ----> cmsg.cmsg_len = %v", cmsg.cmsg_len)
+			log.Printf("(SCIONgorecvmmsg) ----> cmsg.cmsg_level = %v", cmsg.cmsg_level)
 
 			//ADD IP_PKTINFO
 			cmsg = cmsgNextHdr(msghdr, cmsg)
@@ -1101,8 +1143,8 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 
 			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = s.Sinfo.if_index
 			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = srcIP
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP              //TODO: activate this line and remove the next one
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = C.htonl(173026688) //10.80.45.128
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP //TODO: activate this line and remove the next one
+			//(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = C.htonl(173026688) //10.80.45.128
 
 			/*
 				memcpy(&ipi, CMSG_DATA(cmsg), sizeof(ipi));

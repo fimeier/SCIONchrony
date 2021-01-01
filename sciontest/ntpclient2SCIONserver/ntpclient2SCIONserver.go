@@ -192,7 +192,7 @@ func runServer(ctx context.Context, sciondAddr string, localAddr snet.UDPAddr, s
 
 		log.Printf("////////////////////////////////////////////////////// Step 4: forward ntp packet as common UDP packet to ntp server")
 		n, err = connUDP.WriteToUDP(payload, udpCLientAddr)
-		fmt.Printf("\t---->n =%v bytes sent using common udp connection FALSCH FEHLT JA ZIELPORT!!!!\n", n)
+		fmt.Printf("\t---->n =%v bytes sent using common udp connection\n", n)
 
 	}
 }
