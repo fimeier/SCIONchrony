@@ -226,7 +226,7 @@ int SCION_extract_udp_data(unsigned char *msg, NTP_Remote_Address *remote_addr, 
 
 void printNTPPacket(void *ntpPacket, int len);
 
-void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
+int printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
 
 char *getClientSCIONAddress(char *address);
 

@@ -310,14 +310,11 @@ func SCIONstartntp() C.int {
 	for _, s := range fdstatus {
 		if s.isbound {
 			if !s.rcvLogicStarted {
-				log.Printf("(SCIONstartntp) Starting Rcv-Go-Routine for fd=%v!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
-				//s := fdstatus[fd]
 				s.rcvLogicStarted = true
 				fdstatus[s.Fd] = s
-				hallo := fdstatus[s.Fd]
-				log.Printf("(SCIONstartntp) Starting Rcv-Go-Routine for fd=%v", hallo.Fd)
-
-				go hallo.rcvLogic()
+				catchMeGo := fdstatus[s.Fd]
+				log.Printf("(SCIONstartntp) Starting Rcv-Go-Routine for fd=%v", catchMeGo.Fd)
+				go catchMeGo.rcvLogic()
 			}
 
 		}
@@ -768,7 +765,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 }
 
 //export SCIONgosendmsg
-func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAddrString *C.char) C.ssize_t {
+func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAddrString *C.char, _uglyHack C.int) C.ssize_t {
 	fd := int(_fd)
 	_, exists := fdstatus[fd]
 	if !exists {
@@ -798,7 +795,10 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAdd
 		log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, fdstatus[fd].remoteAddress, fdstatus[fd].remoteAddressSCION)
 	}
 
-	go s.sendmsgOverScion(msg.Iov, remoteAddrString)
+	var uglyHack int
+	uglyHack = int(_uglyHack)
+
+	go s.sendmsgOverScion(msg.Iov, remoteAddrString, uglyHack)
 
 	//if the call is blocking, this channel will get the value after msg has been sent
 	bytesSent := <-s.sent
@@ -806,7 +806,7 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAdd
 
 }
 
-func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString string) {
+func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString string, uglyHack int) {
 	log.Printf("(sendmsgOverScion fd=%v) Started", s.Fd)
 
 	nonblocking := int(s.Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK
@@ -846,6 +846,12 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 
 	if s.createTxTimestamp {
 		log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps", s.Fd)
+	}
+
+	var uglyKernelTS bool
+	if uglyHack == (int(C.SOF_TIMESTAMPING_TX_SOFTWARE | C.SOF_TIMESTAMPING_TX_HARDWARE)) {
+		log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps because it is specific requested for this packet", s.Fd)
+		uglyKernelTS = true
 	}
 
 	payload := C.GoBytes(unsafe.Pointer(iovecBase), C.int(iovecLen))
@@ -905,7 +911,7 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 	msgTS.sentTo = remoteAddr
 
 	//add TS's: Src needs to be adpted afte SCION provides the correct TS's
-	if s.txKERNELts {
+	if s.txKERNELts || uglyKernelTS {
 		msgTS.tsType = tskernel //not needed
 		sendMsg = true
 		var ts3 C.struct_scm_timestamping
@@ -1012,7 +1018,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			var bufferPtrDelete *([256]C.char)
 			bufferPtrDelete = (*([256]C.char))(msghdr.msg_control)
 			log.Printf("%v", bufferPtrDelete)
-			for i := 0; i < 256 && i < msgContrLen; i++ {
+			for i := 0; i < 256 && i < msgContrLen; i++ { //Quasi memset einfach ohne C-call (Prüfe was schneller ist)
 				bufferPtrDelete[i] = 0x00
 			}
 
@@ -1076,7 +1082,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			offsetNTP += ihl + 8 //should be 42
 			pktLen += ihl + 8    //should be 90
 
-			//copy ntp packet :-(
+			//copy ntp packet :-( Quasi memset einfach ohne C-call (Pürfe was schneller ist)
 			for a, b := range payloadMsg {
 				//log.Printf("a=%v b=%v", a, b)
 				bufferPtr[a+offsetNTP] = C.char(b)

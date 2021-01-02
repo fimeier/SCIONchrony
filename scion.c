@@ -482,8 +482,8 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
     }
 
     //Todo: Decide if this is still needed
-    //return bind(__fd, __addr, __len) + r;
-    return r;
+    return bind(__fd, __addr, __len) + r;
+    //return r;
 }
 
 int SCION_getsockopt(int __fd, int __level, int __optname, void *__restrict __optval, socklen_t *__restrict __optlen)
@@ -531,12 +531,13 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
 {
     DEBUG_LOG("Sending message on socket fd=%d", __fd);
 
+    int uglyHack = 0;
     if (DEBUG)
     {
         struct mmsghdr msgvec;
         msgvec.msg_hdr = *__message;
         msgvec.msg_len = 0;
-        printMMSGHDR(&msgvec, 1, SCION_IP_TX_NTP_MSG);
+        uglyHack = printMMSGHDR(&msgvec, 1, SCION_IP_TX_NTP_MSG);
     }
 
     int status;
@@ -545,7 +546,7 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
     {
         DEBUG_LOG("\t|----> using SCION");
         DEBUG_LOG("\t|----> connected to %s i.e. %s\n", fdInfos[__fd]->remoteAddress, fdInfos[__fd]->remoteAddressSCION);
-        status = SCIONgosendmsg(__fd, __message, __flags, NULL);
+        status = SCIONgosendmsg(__fd, __message, __flags, NULL, 0);
         DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
         //TODO remove sendmsg()
@@ -572,7 +573,7 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
             char portAsStr[10];
             sprintf(portAsStr, "%u", ntohs(((struct sockaddr_in *)__message->msg_name)->sin_port));
             strcat(remoteAddress, portAsStr);
-            
+
             DEBUG_LOG("\t|----> sending to %s", remoteAddress);
 
             //char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
@@ -580,12 +581,20 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
             if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
             {
                 DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server");
-                status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress);
-                DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
+                if (uglyHack == (SOF_TIMESTAMPING_TX_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE))
+                {
+                    DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server. For this Packet we request TX Timestamps!!!");
+                }
+                status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress, uglyHack);
+                /*DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
                 //TODO remove sendmsg()
-                //DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-                //status = sendmsg(__fd, __message, __flags);
+                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+                status = sendmsg(__fd, __message, __flags);
+                */
 
                 return status;
             }
@@ -617,8 +626,9 @@ union sockaddr_all
     struct sockaddr sa;
 };
 
-void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
+int printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
 {
+    int uglyHack = 0; //this is not safe!!!!
     // int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) || (SCION_TYPE == SCION_IP_RX_NTP_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
     int dataEncapLayer2 = (SCION_TYPE == SCION_IP_TX_ERR_MSG) ? 1 : 0; //0=SCION_IP_TX_NTP_MSG directly in NTP_Packet struct
     int sendNTP = SCION_TYPE == SCION_IP_TX_NTP_MSG ? 1 : 0;
@@ -717,7 +727,7 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
                 struct in_pktinfo ipi;
 
                 memcpy(&ipi, CMSG_DATA(cmsg), sizeof(ipi));
-                DEBUG_LOG("\t\t\t\t\tipi.ipi_ifindex=%d (Interface index)", ipi.ipi_ifindex);
+                DEBUG_LOG("\t\t\t\t\tipi.ipi_ifindex=%d (Interface index) TODO<-Variable machen beim erstellen!!!!!", ipi.ipi_ifindex);
                 DEBUG_LOG("\t\t\t\t\tipi.ipi_spec_dst.s_addr=%s (Local address.. wrong->? Routing destination address)", inet_ntoa(ipi.ipi_spec_dst));
                 DEBUG_LOG("\t\t\t\t\tipi.ipi_addr.s_addr=%s (Header destination address)", inet_ntoa(ipi.ipi_addr));
             }
@@ -739,23 +749,40 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
             }
 #endif
 
-            if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING)
+            if (!sendNTP) //HINT SCM_TIMESTAMPING==SO_TIMESTAMPING... could also distinguish by len
             {
-                processed = 1;
-                DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type SO_TIMESTAMPING", cmsg);
-
-                struct scm_timestamping ts3;
-
-                memcpy(&ts3, CMSG_DATA(cmsg), sizeof(ts3));
-                struct timespec kernel = ts3.ts[0];
-                struct timespec hw = ts3.ts[2];
-                if (kernel.tv_sec)
+                if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_TIMESTAMPING) ///CMSG_LEN(sizeof(__u32))
                 {
-                    DEBUG_LOG("\t\t\t\t\tKerne-TS tv_sec=%ld tv_nsec=%ld", kernel.tv_sec, kernel.tv_nsec);
+                    processed = 1;
+                    DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type SCM_TIMESTAMPING", cmsg);
+
+                    struct scm_timestamping ts3;
+
+                    memcpy(&ts3, CMSG_DATA(cmsg), sizeof(ts3));
+                    struct timespec kernel = ts3.ts[0];
+                    struct timespec hw = ts3.ts[2];
+                    if (kernel.tv_sec)
+                    {
+                        DEBUG_LOG("\t\t\t\t\tKerne-TS tv_sec=%ld tv_nsec=%ld", kernel.tv_sec, kernel.tv_nsec);
+                    }
+                    if (hw.tv_sec)
+                    {
+                        DEBUG_LOG("\t\t\t\t\tHW-TS tv_sec=%ld tv_nsec=%ld", hw.tv_sec, hw.tv_nsec);
+                    }
                 }
-                if (hw.tv_sec)
+            }
+            else
+            {
+                if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SO_TIMESTAMPING)
                 {
-                    DEBUG_LOG("\t\t\t\t\tHW-TS tv_sec=%ld tv_nsec=%ld", hw.tv_sec, hw.tv_nsec);
+                    processed = 1;
+                    DEBUG_LOG("\t\t\t\t|-----> *cmsghdr@%p is of type SO_TIMESTAMPING (!!!This requests TX-Timestamps for this packet!!!", cmsg);
+
+                    int *ts_tx_flags;
+                    ts_tx_flags = (void *)CMSG_DATA(cmsg);
+                    DEBUG_LOG("\t\t\t\t\tts_tx_flags=%d (should be 3, i.e. SOF_TIMESTAMPING_TX_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE", *ts_tx_flags);
+
+                    uglyHack = *ts_tx_flags;
                 }
             }
 
@@ -820,6 +847,8 @@ void printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE)
             }
         }
     }
+
+    return uglyHack;
 }
 
 void printNTPPacket(void *ntpPacket, int len)
@@ -880,6 +909,29 @@ void printNTPPacket(void *ntpPacket, int len)
 
 int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, int __flags, struct timespec *__tmo)
 {
+    /* I do not set msg_flags... chrony is okay with it. CHECK IT FOR INTERLEAVED MODE
+MSG_EOR == 128
+End of record was received (if supported by the protocol).
+MSG_OOB == 1
+Out-of-band data was received.
+MSG_TRUNC == 32
+Normal data was truncated.
+MSG_CTRUNC == 8
+
+MSG_ERRQUEUE	= 0x2000  == 8192 für alles was von error queue gelesen wird
+
+Was Chrony beim empfang prüft
+  if (msg->msg_flags & MSG_TRUNC) {
+    log_message(sock_fd, 1, message, "Truncated", NULL);
+    r = 0;
+  }
+
+  if (msg->msg_flags & MSG_CTRUNC) {
+    log_message(sock_fd, 1, message, "Truncated cmsg in", NULL);
+    r = 0;
+  }
+
+    */
 
     //assuming this are the only possible flags
     int receiveFlag = (__flags & MSG_ERRQUEUE) ? SCION_MSG_ERRQUEUE : SCION_FILE_INPUT;
@@ -925,9 +977,16 @@ int SCION_recvmmsg(int __fd, struct mmsghdr *__vmessages, unsigned int __vlen, i
         DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
 
         //TODO remove recvmmsg()
-        /*DEBUG_LOG("TODO remove recvmmsg()!!!!");
-        n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
-        DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
+        /*
+        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        DEBUG_LOG("TODO remove recvmmsg()!!!!");
+        printMMSGHDR(__vmessages, n, scion_type);
+
+        int nn = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+        DEBUG_LOG("|----->received %d messages over NON-scion connection", nn);
         */
     }
     else

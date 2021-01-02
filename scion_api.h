@@ -130,7 +130,7 @@ REMARK: At the moment there is no write-Queue => all Flags will be set to  zero 
 		(*syscall.Timeval)(unsafe.Pointer(timeout)))
 */
 extern int SCIONselect(int nfds, fdsetPtr readfds, fdsetPtr writefds, fdsetPtr exceptfds, timevalPtr timeout);
-extern ssize_t SCIONgosendmsg(int _fd, msghdrConstPtr message, int flags, char* _remoteAddrString);
+extern ssize_t SCIONgosendmsg(int _fd, msghdrConstPtr message, int flags, char* _remoteAddrString, int _uglyHack);
 
 // SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff
 extern int SCIONgorecvmmsg(int _fd, mmsghdrPtr vmessages, unsigned int vlen, int flags, timespecPtr tmo);

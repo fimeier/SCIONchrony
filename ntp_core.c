@@ -2104,7 +2104,7 @@ NCR_ProcessRxUnknown(NTP_Remote_Address *remote_addr, NTP_Local_Address *local_a
      in the interleaved mode.  This means the third reply to a new client is
      the earliest one that can be interleaved.  We don't want to waste time
      on clients that are not using the interleaved mode. */
-  if (kod == 0 && log_index >= 0) {
+  if (kod == 0 && log_index >= 0) { //INTERLEAVED MODE
     CLG_GetNtpTimestamps(log_index, &local_ntp_rx, &local_ntp_tx);
     interleaved = !UTI_IsZeroNtp64(local_ntp_rx) &&
                   !UTI_CompareNtp64(&message->originate_ts, local_ntp_rx) &&
