@@ -116,7 +116,9 @@ typedef enum
    NOT_CONNECTED = 0,
    CONNECTED_TO_NTP_SERVER,
    IS_NTP_SERVER, //a socket to receive ntp packets as an NTP-Server (ChronyD acts as server)
-   IS_CMD_SOCKET //a socket to receive cmd's from chronyC
+   IS_CMD_SOCKET, //a socket to receive cmd's from chronyC
+   IS_CHRONY_STREAM_SOCKET, //doNotCreateScionSocket
+   SOMETHING_ELSE
 } SCION_CONNECTION_TYPE; //rename this
 
 typedef struct fdInfo
@@ -127,6 +129,7 @@ typedef struct fdInfo
    int type;
    int protocol;
    int connectionType; //rename this
+   int noScionSocket; //>0 means there is no "socket" in scion
    IPSockAddr boundTo;
    char remoteAddress[MAXADDRESSLENGTH];
    char remoteAddressSCION[MAXADDRESSLENGTH];

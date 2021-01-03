@@ -22,8 +22,8 @@
 # Makefile template
 
 SYSCONFDIR = /etc
-BINDIR = /usr/scion/bin
-SBINDIR = /usr/scion/sbin
+BINDIR = /usr/scion//bin
+SBINDIR = /usr/scion//sbin
 LOCALSTATEDIR = /var
 CHRONYVARDIR = /var/lib/chrony
 DESTDIR =
@@ -33,29 +33,26 @@ BACKUPCFLAGSORIGINAL = -O2 -g -D_FORTIFY_SOURCE=2 -fPIE -fstack-protector-strong
 BACKUPCFLAGMEINS = -O0 -g -Wall -pthread
 CFLAGS = -O0 -g -Wall -pthread
 
-CPPFLAGS =   -I/usr/include/p11-kit-1
+CPPFLAGS = 
 LDFLAGS =  -pie -Wl,-z,relro,-z,now
 
-EXTRA_OBJS = sys_generic.o sys_linux.o sys_timex.o sys_posix.o cmdmon.o manual.o pktlength.o ntp_auth.o ntp_core.o ntp_ext.o ntp_io.o ntp_sources.o addrfilt.o clientlog.o keys.o nameserv.o refclock.o refclock_phc.o refclock_pps.o refclock_shm.o refclock_sock.o nameserv_async.o hwclock.o ntp_io_linux.o rtc_linux.o cmac_nettle.o hash_nettle.o siv_nettle.o nts_ke_client.o nts_ke_server.o nts_ke_session.o nts_ntp_auth.o nts_ntp_client.o nts_ntp_server.o
-
+EXTRA_OBJS = sys_generic.o sys_linux.o sys_timex.o sys_posix.o cmdmon.o manual.o pktlength.o ntp_auth.o ntp_core.o ntp_ext.o ntp_io.o ntp_sources.o addrfilt.o clientlog.o keys.o nameserv.o refclock.o refclock_phc.o refclock_pps.o refclock_shm.o refclock_sock.o nameserv_async.o hwclock.o ntp_io_linux.o rtc_linux.o hash_intmd5.o
 EXTRA_OBJS_SCION = scion.o
-
 OBJS = array.o cmdparse.o conf.o local.o logging.o main.o memory.o \
        reference.o regress.o rtc.o samplefilt.o sched.o socket.o sources.o sourcestats.o \
        stubs.o smooth.o sys.o sys_null.o tempcomp.o util.o $(EXTRA_OBJS) $(EXTRA_OBJS_SCION)
 
-EXTRA_CLI_OBJS =  cmac_nettle.o hash_nettle.o
+EXTRA_CLI_OBJS =  hash_intmd5.o
 
 CLI_OBJS = array.o client.o cmdparse.o getdate.o memory.o nameserv.o \
            pktlength.o socket.o util.o $(EXTRA_CLI_OBJS) $(EXTRA_OBJS_SCION)
 
 ALL_OBJS = $(OBJS) $(CLI_OBJS)
 
-LIBS =  -lm -lnettle -lgnutls
-EXTRA_LIBS =  -lcap
-EXTRA_CLI_LIBS =  
+LIBS =  -lm 
+EXTRA_LIBS = 
+EXTRA_CLI_LIBS = 
 EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion_api.so#SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
-
 
 # Until we have a main procedure we can link, just build object files
 # to test compilation
