@@ -243,13 +243,13 @@ int SCION_close(int sock_fd)
 
     if (fdInfos[sock_fd] != NULL)
     {
-        if (fdInfos[sock_fd]->noScionSocket == 0)
+        if (fdInfos[sock_fd]->socketType == 0)
         {
             SCIONgoclose(sock_fd);
         }
         else
         {
-            DEBUG_LOG("----> There is no socket in scion. Reason = %d => not calling SCIONgoclose()", fdInfos[sock_fd]->noScionSocket);
+            DEBUG_LOG("----> There is no socket in scion. Reason = %d => not calling SCIONgoclose()", fdInfos[sock_fd]->socketType);
         }
         free(fdInfos[sock_fd]);
     }
@@ -262,6 +262,7 @@ __domain as defined in bits/socket.h
 int SCION_socket(int __domain, int __type, int __protocol)
 {
     DEBUG_LOG("Creating socket with domain=%d type=%d protocol=%d", __domain, __type, __protocol);
+    int fd = socket(__domain, __type, __protocol);
 
     /*
 NTS
@@ -270,6 +271,9 @@ Creating socket with domain=2 (ok) type=526337 protocol=0
     int doNotCreateScionSocket = 0;
 
     fdInfo *sinfo = calloc(1, sizeof(fdInfo));
+    fdInfos[fd] = sinfo;
+
+    sinfo->fd = fd;
     sinfo->domain = __domain;
     sinfo->type = __type;
     sinfo->protocol = __protocol;
@@ -286,9 +290,13 @@ Creating socket with domain=2 (ok) type=526337 protocol=0
             break;
         case AF_UNIX:
             DEBUG_LOG("----> domain = AF_UNIX");
+            doNotCreateScionSocket = 1;
+            sinfo->socketType = SOMETHING_ELSE;
             break;
         default:
             DEBUG_LOG("----> domain = tbd");
+            doNotCreateScionSocket = 1;
+            sinfo->socketType = SOMETHING_ELSE;
             break;
         }
 
@@ -306,16 +314,13 @@ Creating socket with domain=2 (ok) type=526337 protocol=0
         case SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK:
             DEBUG_LOG("----> type = SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK (a socket for NTS or other TCP)");
             doNotCreateScionSocket = 1;
+            sinfo->socketType = IS_CHRONY_STREAM_SOCKET;
             break;
         default:
             DEBUG_LOG("----> type = tbd");
             break;
         }
     }
-
-    int fd = socket(__domain, __type, __protocol);
-    sinfo->fd = fd;
-    fdInfos[fd] = sinfo;
 
     DEBUG_LOG("----> fd = %d (received from system, using this for SCION)", fd);
 
@@ -330,7 +335,6 @@ Creating socket with domain=2 (ok) type=526337 protocol=0
     else
     {
         DEBUG_LOG("----> fd = %d Not creating a SCION socket as this is (probably for nts or other things)", fd);
-        sinfo->noScionSocket = IS_CHRONY_STREAM_SOCKET;
     }
     //SCIONPrintState(fd);
     return fd;
@@ -342,7 +346,7 @@ TODO TX/RX detection has to be generic...
 */
 int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval, socklen_t __optlen)
 {
-    DEBUG_LOG("Setting options fd=%d level=%d optname=%d", __fd, __level, __optname);
+    DEBUG_LOG("\tSetting options fd=%d level=%d optname=%d", __fd, __level, __optname);
 
     int scion_level = SCION_LE_UNDEFINED;
     int scion_optname = SCION_OPT_UNDEFINED;
@@ -352,20 +356,20 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     case IPPROTO_IP:
-        DEBUG_LOG("----> level = IPPROTO_IP");
+        DEBUG_LOG("\t|----> level = IPPROTO_IP");
         scion_level = SCION_IPPROTO_IP;
         switch (__optname)
         {
         case IP_PKTINFO:
-            DEBUG_LOG("----> optname = IP_PKTINFO");
+            DEBUG_LOG("\t|----> optname = IP_PKTINFO");
             scion_optname = SCION_IP_PKTINFO;
             break;
         case IP_FREEBIND:
-            DEBUG_LOG("----> optname = IP_FREEBIND");
+            DEBUG_LOG("\t|----> optname = IP_FREEBIND");
             scion_optname = SCION_IP_FREEBIND;
             break;
         default:
-            DEBUG_LOG("----> optname = %d", __optname);
+            DEBUG_LOG("\t|----> optname = %d", __optname);
             scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
@@ -374,32 +378,32 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     case SOL_SOCKET:
-        DEBUG_LOG("----> level = SOL_SOCKET");
+        DEBUG_LOG("\t|----> level = SOL_SOCKET");
         scion_level = SCION_SOL_SOCKET;
         switch (__optname)
         {
         case SO_REUSEADDR:
-            DEBUG_LOG("----> optname = SO_REUSEADDR");
+            DEBUG_LOG("\t|----> optname = SO_REUSEADDR");
             scion_optname = SCION_SO_REUSEADDR;
             break;
         case SO_REUSEPORT:
-            DEBUG_LOG("----> optname = SO_REUSEPORT");
+            DEBUG_LOG("\t|----> optname = SO_REUSEPORT");
             scion_optname = SCION_SO_REUSEPORT;
             break;
         case SO_TIMESTAMPING:
-            DEBUG_LOG("----> optname = SO_TIMESTAMPING");
+            DEBUG_LOG("\t|----> optname = SO_TIMESTAMPING");
             scion_optname = SCION_SO_TIMESTAMPING;
             break;
         case SO_BROADCAST:
-            DEBUG_LOG("----> optname = SO_BROADCAST");
+            DEBUG_LOG("\t|----> optname = SO_BROADCAST");
             scion_optname = SCION_SO_BROADCAST;
             break;
         case SO_SELECT_ERR_QUEUE:
-            DEBUG_LOG("----> optname = SO_SELECT_ERR_QUEUE");
+            DEBUG_LOG("\t|----> optname = SO_SELECT_ERR_QUEUE");
             scion_optname = SCION_SO_SELECT_ERR_QUEUE;
             break;
         default:
-            DEBUG_LOG("----> optname = %d", __optname);
+            DEBUG_LOG("\t|----> optname = %d", __optname);
             scion_optname = SCION_OPT_UNDEFINED;
             break;
         }
@@ -407,8 +411,8 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
         /************************************************************/
 
     default:
-        DEBUG_LOG("----> level = %d", __level);
-        DEBUG_LOG("----> optname = %d", __optname);
+        DEBUG_LOG("\t|----> level = %d", __level);
+        DEBUG_LOG("\t|----> optname = %d", __optname);
         scion_optname = SCION_OPT_UNDEFINED;
         break;
     }
@@ -417,18 +421,18 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     int createRxTimestamp = 0;
     if (*((int *)__optval) != 0)
     {
-        DEBUG_LOG("----> optval = %d => activate option", *((int *)__optval));
+        DEBUG_LOG("\t|----> optval = %d => activate option", *((int *)__optval));
         if (__optname == SO_TIMESTAMPING)
         {
             if (*((int *)__optval) == ts_flags_p52)
             { //access ts_flags in ntp_io_linux
-                DEBUG_LOG("---->  This is the option to activate RX-Timestamps (HW/Kernel)");
+                DEBUG_LOG("\t|---->  This is the option to activate RX-Timestamps (HW/Kernel)");
                 createTxTimestamp = 0;
                 createRxTimestamp = 1;
             }
             if (*((int *)__optval) == (ts_flags_p52 | ts_tx_flags_p52))
             { //access ts_flags in ntp_io_linux
-                DEBUG_LOG("----> This is the option to activate TX/RX-Timestamps (HW/Kernel)");
+                DEBUG_LOG("\t|----> This is the option to activate TX/RX-Timestamps (HW/Kernel)");
                 createTxTimestamp = 1;
                 createRxTimestamp = 1;
             }
@@ -436,26 +440,26 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
     }
     else
     {
-        DEBUG_LOG("----> optval = 0 => disable option");
+        DEBUG_LOG("\t|----> optval = 0 => disable option");
     }
 
     /*On success, zero is returned for the standard options.  On error, -1
     is returned, and errno is set appropriately.*/
-    DEBUG_LOG("----> WARNING: I always set the socket options in the c-world");
+    DEBUG_LOG("\t|----> WARNING: I always set the socket options in the c-world");
     int result = setsockopt(__fd, __level, __optname, __optval, __optlen);
 
-    if (fdInfos[__fd] != NULL && fdInfos[__fd]->noScionSocket == 0) //if this is not a scion "socket", we return
+    if (fdInfos[__fd] != NULL && fdInfos[__fd]->socketType == 0) //if this is not a scion "socket", we return
     {
         fdInfo *fdi = fdInfos[__fd];
-        if (fdi->noScionSocket == 0)
-        fdi->level_optname_value[scion_level][scion_optname] = *((int *)__optval);
+        if (fdi->socketType == 0)
+            fdi->level_optname_value[scion_level][scion_optname] = *((int *)__optval);
         fdi->createTxTimestamp = createTxTimestamp;
         fdi->createRxTimestamp = createRxTimestamp;
         SCIONgosetsockopt(__fd);
     }
     if (result < 0)
     {
-        DEBUG_LOG("----> setsockopt() returned an error!");
+        DEBUG_LOG("\t|----> setsockopt() returned an error!");
     }
 
     //Returning this for chrony
@@ -472,15 +476,17 @@ int SCION_setsockopt(int __fd, int __level, int __optname, const void *__optval,
 */
 int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
 {
-    DEBUG_LOG("Binding fd=%d", __fd);
+    DEBUG_LOG("\tBinding fd=%d", __fd);
 
     int r = 0;
+
+    assert(ntpPort != commandPort);
 
     if (fdInfos[__fd] != NULL) //should always be true
     {
         fdInfo *fdi = fdInfos[__fd];
         SCK_SockaddrToIPSockAddr(__addr, __len, &fdi->boundTo);
-        DEBUG_LOG("\t|---->%s", UTI_IPSockAddrToString(&fdi->boundTo));
+        DEBUG_LOG("\t|----> %s", UTI_IPSockAddrToString(&fdi->boundTo));
 
         if (fdi->boundTo.port == ntpPort)
         {
@@ -488,11 +494,19 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
             fdi->connectionType = IS_NTP_SERVER;
             r = SCIONgobind(__fd, fdi->boundTo.port);
             DEBUG_LOG("\t|----> SCIONgobind() return-state: %d", r);
+
+            r += bind(__fd, __addr, __len); //assumptions: <0 is an error
+            DEBUG_LOG("\t|----> SCIONgobind() Also bound normal port. Combined return state: %d", r);
+            return r;
         }
         else if (fdi->boundTo.port == commandPort)
         {
-            DEBUG_LOG("\t|----> NOT calling SCIONgobind() as this is is Chrony's Command Socket");
+            DEBUG_LOG("\t|----> NOT calling SCIONgobind() as this is is Chrony's Command Socket.");
+            DEBUG_LOG("\t|----> Will delete datastructures in go-World and call standard bind()");
             fdi->connectionType = IS_CMD_SOCKET;
+            fdi->socketType = IS_CMD_SOCKET;
+            SCIONgoclose(__fd);
+            return bind(__fd, __addr, __len);
         }
     }
     else
@@ -501,8 +515,7 @@ int SCION_bind(int __fd, struct sockaddr *__addr, socklen_t __len)
     }
 
     //Todo: Decide if this is still needed
-    return bind(__fd, __addr, __len) + r;
-    //return r;
+    return bind(__fd, __addr, __len);
 }
 
 int SCION_getsockopt(int __fd, int __level, int __optname, void *__restrict __optval, socklen_t *__restrict __optlen)
@@ -525,7 +538,7 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
     {
         fdInfo *fdi = fdInfos[__fd];
 
-        if (fdi->noScionSocket == 0)
+        if (fdi->socketType == 0)
         {
             char *ntpServerAsScionAddress = getNTPServerSCIONAddress(remoteAddress);
 
@@ -546,16 +559,17 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
                 return SCIONgoconnect(__fd);
             }
             //If we don't have a SCION address this implies we are connecting to a common NTP-Server
-            else {
+            else
+            {
                 DEBUG_LOG("\t|----->  We don't have a scion address. Will delete datastructures in go-Wold an call standard connect()");
-                fdi->noScionSocket = fdi->connectionType = SOMETHING_ELSE; //HAHA: connectionType kann garnicht gesetzt sein
+                fdi->socketType = fdi->connectionType = SOMETHING_ELSE; //HAHA: connectionType kann garnicht gesetzt sein
                 SCIONgoclose(__fd);
                 return connect(__fd, __addr, __len);
             }
         }
         else
         {
-            DEBUG_LOG("----> There is no socket in scion. Reason = %d. Will use standard connect()", fdi->noScionSocket);
+            DEBUG_LOG("----> There is no socket in scion. Reason = %d. Will use standard connect()", fdi->socketType);
             return connect(__fd, __addr, __len); //probably not needed
         }
     }
@@ -568,6 +582,7 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
 
 ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
 {
+    int status = -1;
     DEBUG_LOG("Sending message on socket fd=%d", __fd);
 
     int uglyHack = 0;
@@ -579,53 +594,56 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
         uglyHack = printMMSGHDR(&msgvec, 1, SCION_IP_TX_NTP_MSG);
     }
 
-    int status;
-    /* Chronyd talks as a Client to a Server */
-    if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
+    if ((fdInfos[__fd] != NULL) && fdInfos[__fd]->socketType == 0)
     {
-        DEBUG_LOG("\t|----> using SCION");
-        DEBUG_LOG("\t|----> connected to %s i.e. %s\n", fdInfos[__fd]->remoteAddress, fdInfos[__fd]->remoteAddressSCION);
-        status = SCIONgosendmsg(__fd, __message, __flags, NULL, 0);
-        DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
-        //TODO remove sendmsg()
-        /*DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
+        int status;
+        /* Chronyd talks as a Client to a Server */
+        if (fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER) //impliziert primär dass connected und IP bekannt
+        {
+            DEBUG_LOG("\t|----> using SCION");
+            DEBUG_LOG("\t|----> connected to %s i.e. %s\n", fdInfos[__fd]->remoteAddress, fdInfos[__fd]->remoteAddressSCION);
+            status = SCIONgosendmsg(__fd, __message, __flags, NULL, 0);
+            DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
+
+            //TODO remove sendmsg()
+            /*DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
         if (SENDNTPPERIP)
-            status = sendmsg(__fd, __message, __flags);
-            
-        return status;*/
-    }
+            status = sendmsg(__fd, __message, __flags);*/
 
-    if (__message->msg_namelen != 0)
-    {
-        switch (((struct sockaddr *)__message->msg_name)->sa_family)
+            return status;
+        }
+
+        if (__message->msg_namelen != 0)
         {
-        case AF_INET:
-        {
-            /* Chronyd talks as a Server to a Client */
-
-            //TODO fix this ugly construct: depends on how the GO-Part registers the clients
-            char remoteAddress[MAXADDRESSLENGTH] = ""; //initialization is needed!!!
-            strcat(remoteAddress, inet_ntoa(((struct sockaddr_in *)__message->msg_name)->sin_addr));
-            // TODO: Add port
-            strcat(remoteAddress, ":");
-            char portAsStr[10];
-            sprintf(portAsStr, "%u", ntohs(((struct sockaddr_in *)__message->msg_name)->sin_port));
-            strcat(remoteAddress, portAsStr);
-
-            DEBUG_LOG("\t|----> sending to %s", remoteAddress);
-
-            //char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
-            //if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
-            if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
+            switch (((struct sockaddr *)__message->msg_name)->sa_family)
             {
-                DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server");
-                if (uglyHack == (SOF_TIMESTAMPING_TX_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE))
+            case AF_INET:
+            {
+                /* Chronyd talks as a Server to a Client */
+
+                //TODO fix this ugly construct: depends on how the GO-Part registers the clients
+                char remoteAddress[MAXADDRESSLENGTH] = ""; //initialization is needed!!!
+                strcat(remoteAddress, inet_ntoa(((struct sockaddr_in *)__message->msg_name)->sin_addr));
+                // TODO: Add port
+                strcat(remoteAddress, ":");
+                char portAsStr[10];
+                sprintf(portAsStr, "%u", ntohs(((struct sockaddr_in *)__message->msg_name)->sin_port));
+                strcat(remoteAddress, portAsStr);
+
+                DEBUG_LOG("\t|----> sending to %s", remoteAddress);
+
+                //char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
+                //if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
+                if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
                 {
-                    DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server. For this Packet we request TX Timestamps!!!");
-                }
-                status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress, uglyHack);
-                /*DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
+                    DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server");
+                    if (uglyHack == (SOF_TIMESTAMPING_TX_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE))
+                    {
+                        DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server. For this Packet we request TX Timestamps!!!");
+                    }
+                    status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress, uglyHack);
+                    /*DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
 
                 //TODO remove sendmsg()
                 DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
@@ -635,18 +653,20 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
                 status = sendmsg(__fd, __message, __flags);
                 */
 
-                return status;
+                    return status;
+                }
+                break;
             }
-            break;
-        }
-        case AF_UNIX:
-            DEBUG_LOG("\t|----> sending to = %s", ((struct sockaddr_un *)__message->msg_name)->sun_path);
-            break;
-        default:
-            DEBUG_LOG("\t|----> sending to (NOT IMPLEMENTED!!!) = tbd");
-            break;
+            case AF_UNIX:
+                LOG_FATAL("\t|----> sending to = %s (AF_UNIX NOT IMPLEMENTED)", ((struct sockaddr_un *)__message->msg_name)->sun_path);
+                break;
+            default:
+                LOG_FATAL("\t|----> sending to (NOT IMPLEMENTED!!!) = tbd");
+                break;
+            }
         }
     }
+
     DEBUG_LOG("\t|----> not a connection to a scion target. Not using SCION!");
     status = sendmsg(__fd, __message, __flags);
     DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
@@ -925,7 +945,7 @@ void printNTPPacket(void *ntpPacket, int len)
     DEBUG_LOG("\t\t\t|-----> receive_ts=%u.%u", ntp->receive_ts.hi, ntp->receive_ts.lo);
     DEBUG_LOG("\t\t\t|-----> transmit_ts=%u.%u", ntp->transmit_ts.hi, ntp->transmit_ts.lo);
 
-    DEBUG_LOG("\t\t\t|-----> extensions=tbd %s", len > NTP_HEADER_LENGTH ? "there are extensions as the packet is longer than expected":"");
+    DEBUG_LOG("\t\t\t|-----> extensions=tbd %s", len > NTP_HEADER_LENGTH ? "there are extensions as the packet is longer than expected" : "");
 
     /*
     uint8_t lvm; //mefi84 LeapIndicator(2)||VersionNumber(3)||Mode(3) == 8 Bits
@@ -972,6 +992,10 @@ Was Chrony beim empfang prüft
 
     */
 
+    /*Receive up to VLEN messages as described by VMESSAGES from socket FD.
+   Returns the number of messages received or -1 for errors.*/
+    int n = 0;
+
     //assuming this are the only possible flags
     int receiveFlag = (__flags & MSG_ERRQUEUE) ? SCION_MSG_ERRQUEUE : SCION_FILE_INPUT;
     int scion_type = (__flags & MSG_ERRQUEUE) ? SCION_IP_TX_ERR_MSG : SCION_IP_RX_NTP_MSG;
@@ -982,24 +1006,18 @@ Was Chrony beim empfang prüft
     flagsMeaning = (receiveFlag == SCION_MSG_ERRQUEUE) ? "MSG_ERRQUEUE" : "file input";
     DEBUG_LOG("Receiving message on socket fd=%d with flags=%d => %s", __fd, __flags, flagsMeaning);
 
-    /*Receive up to VLEN messages as described by VMESSAGES from socket FD.
-   Returns the number of messages received or -1 for errors.*/
-    int n = 0;
-    //CHronyd acts as a Client
-    if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
+    if ((fdInfos[__fd] != NULL) && fdInfos[__fd]->socketType == 0)
     {
-        /*
-        Hier weitermachen... was soll genau passieren!!!!???
-        ZB entscheide ob als nächstes GO Augerufen wird... ob zB. receiveFlag oder __flags weitergegeben werden soll
-        */
 
-        //For the case RX NTP implement the case here and call the printMMSGHDR() function to check it
+        //CHronyd acts as a Client
+        if (fdInfos[__fd]->connectionType == CONNECTED_TO_NTP_SERVER)
+        {
 
-        n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
-        DEBUG_LOG("|----->received %d messages over SCION connection", n);
+            n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+            DEBUG_LOG("|----->received %d messages over SCION connection", n);
 
-        //TODO remove recvmmsg()
-        /*DEBUG_LOG("TODO remove recvmmsg()!!!!");
+            //TODO remove recvmmsg()
+            /*DEBUG_LOG("TODO remove recvmmsg()!!!!");
         if (receiveFlag == SCION_FILE_INPUT)
         {
             printMMSGHDR(__vmessages, n, scion_type);
@@ -1007,16 +1025,16 @@ Was Chrony beim empfang prüft
         }
         DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
         */
-    }
-    //Chronyd acts as the NTP Server
-    else if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
-    {
-        n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
-        DEBUG_LOG("|----->received %d messages over SCION connection (we are the NTP Server)", n);
-        DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
+        }
+        //Chronyd acts as the NTP Server
+        else if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
+        {
+            n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+            DEBUG_LOG("|----->received %d messages over SCION connection (we are the NTP Server)", n);
+            DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
 
-        //TODO remove recvmmsg()
-        /*
+            //TODO remove recvmmsg()
+            /*
         DEBUG_LOG("TODO remove recvmmsg()!!!!");
         DEBUG_LOG("TODO remove recvmmsg()!!!!");
         DEBUG_LOG("TODO remove recvmmsg()!!!!");
@@ -1027,6 +1045,7 @@ Was Chrony beim empfang prüft
         int nn = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
         DEBUG_LOG("|----->received %d messages over NON-scion connection", nn);
         */
+        }
     }
     else
     {
@@ -1051,13 +1070,12 @@ int SCION_select(int __nfds, fd_set *__restrict __readfds,
 {
 
     DEBUG_LOG("SCION_select(...) called....");
-    //int n = SCIONselect(__nfds, __readfds, __writefds, __exceptfds, __timeout);
     int n = SCIONselect(__nfds, __readfds, __writefds, __exceptfds, __timeout);
-   /* DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
+    /*
+     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
-
     int n = select(__nfds, __readfds, __writefds, __exceptfds, __timeout);*/
 
     DEBUG_LOG("SCION_select(...) found %d ready fd's", n);

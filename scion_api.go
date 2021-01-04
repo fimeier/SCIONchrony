@@ -60,14 +60,18 @@ const pktLengtLayer2 = 90
 
 //datastructure for SCIONselect
 type fdset struct {
-	fd             int
-	exists         bool
-	readSelected   bool
-	writeSelected  bool
-	exceptSelected bool
-	readReady      bool
-	writeReady     bool
-	exceptReady    bool
+	fd                int
+	exists            bool
+	checkBothWorlds   bool
+	readSelected      bool
+	writeSelected     bool
+	exceptSelected    bool
+	readReady         bool
+	writeReady        bool
+	exceptReady       bool
+	readReadyCworld   bool
+	writeReadyCworld  bool
+	exceptReadyCworld bool
 }
 
 //FDSTATUS contains EVERYTHING
@@ -368,8 +372,7 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 		return C.int(-1)
 	}
 
-	log.Printf("localAddr.IA=%v, localAddr.Host=%v", localAddr.IA, localAddr.Host)
-	log.Printf("bindAddr.IA=%v, bindAddr.Host=%v", bindAddr.IA, bindAddr.Host)
+	log.Printf("(SCIONgobind)--> bindAddr.IA=%v, bindAddr.Host=%v", bindAddr.IA, bindAddr.Host)
 
 	s.isbound = true
 	s.sent = make(chan int)
@@ -378,7 +381,7 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 	s.sendQueueTS = make(chan sendMsgTS, int(C.MSGBUFFERSIZESERVER))
 
 	fdstatus[fd] = s //store it back
-	log.Printf("(SCIONgobind) Registered Port %v for fd=%v. rcvLogic() not started!", port, fd)
+	log.Printf("(SCIONgobind)--> Registered Port %v for fd=%v. rcvLogic() not started!", port, fd)
 
 	//TODO: ACHTUNG SETTINGS sockopt sind hier nicht gesetzt
 	//log.Printf("(SCIONgobind) Starting Rcv-Go-Routine")
@@ -469,9 +472,9 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 
 	fdstatus[fd] = s //store it back
 
-	log.Printf("(SCIONgosetsockopt) Called for socket %d. Checking settings...\n", fd)
-	log.Printf("(SCIONgosetsockopt) \t|---->  createTxTimestamp=%v", s.createTxTimestamp)
-	log.Printf("(SCIONgosetsockopt) \t|---->  createRxTimestamp=%v", s.createRxTimestamp)
+	log.Printf("(SCIONgosetsockopt) |--> Called for socket %d. Checking settings...\n", fd)
+	log.Printf("(SCIONgosetsockopt) |--> createTxTimestamp=%v", s.createTxTimestamp)
+	log.Printf("(SCIONgosetsockopt) |--> createRxTimestamp=%v", s.createRxTimestamp)
 
 	/*On success, zero is returned for the standard options.  On error, -1
 	is returned, and errno is set appropriately.*/
@@ -533,8 +536,6 @@ func SCIONgoclose(_fd C.int) C.int {
 	if s.doneRcv != nil {
 		log.Printf("(SCIONgoclose) ----> closing doneRcv channel")
 		close(s.doneRcv)
-	} else {
-		log.Printf("(SCIONgoclose) ----> There is no doneRcv channel. Nothing to close")
 	}
 	//todo: what else needs to be done?
 
@@ -653,8 +654,13 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		var fdPtr uintptr
 		fdPtr = uintptr(fd)
 
-		_, exists := fdstatus[fd] //we can ignore them: Assumption: We are still in chronyd's main thread => while we are in SCIONselect, there cannot be created any new states. If this is not true anymore, check it at the beginning of the loop. Relevant for very long running timeouts.
-
+		var checkBothWorlds bool
+		s, exists := fdstatus[fd] //we can ignore them: Assumption: We are still in chronyd's main thread => while we are in SCIONselect, there cannot be created any new states. If this is not true anymore, check it at the beginning of the loop. Relevant for very long running timeouts.
+		if exists {
+			if s.isNTPServer {
+				checkBothWorlds = true
+			}
+		}
 		var rIsSet, eIsSet, wIsSet bool
 		if readfds != nil {
 			rIsSet = rset.IsSet(fdPtr)
@@ -670,14 +676,18 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 			//add set to slice
 			fdsets = append(fdsets,
 				&fdset{
-					fd:             fd,
-					exists:         exists,
-					readSelected:   rIsSet,
-					writeSelected:  wIsSet,
-					exceptSelected: eIsSet,
-					readReady:      false,
-					writeReady:     false,
-					exceptReady:    false,
+					fd:                fd,
+					exists:            exists,          //if they don't exist => c-Sockets
+					checkBothWorlds:   checkBothWorlds, //also check c-Sockets
+					readSelected:      rIsSet,
+					writeSelected:     wIsSet,
+					exceptSelected:    eIsSet,
+					readReady:         false,
+					writeReady:        false,
+					exceptReady:       false,
+					readReadyCworld:   false,
+					writeReadyCworld:  false,
+					exceptReadyCworld: false,
 				})
 		}
 
@@ -704,20 +714,115 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 				readMsg = len(s.rcvQueueNTPTS) //read input
 				if readMsg > 0 {
 					fdset.readReady = true
-					numOfBitsSet++
+					if fdset.readReadyCworld != true {
+						numOfBitsSet++
+					}
 				}
 			}
 			if fdset.exceptSelected {
 				errorMsg = len(s.sendQueueTS) //exceptions
 				if errorMsg > 0 {
 					fdset.exceptReady = true
-					numOfBitsSet++
+					if fdset.writeReadyCworld != true {
+						numOfBitsSet++
+					}
 				}
 			}
 
 			if readMsg+errorMsg > 0 {
 				log.Printf("(SCIONselect) ----> fd=%v: readMsg=%v errorMsg=%v", fdset.fd, readMsg, errorMsg)
 			}
+		}
+
+		//Experimental: Achtung behaviour unklar: Socket kann in Scion, C oder beiden bestehen
+		//Prüfe aktuell einfach Sockets die nur in C-Bestehen => fdset.exists sollte nicht bestehen
+		//Todo prüfe ob das mit dem rückschreiben so funktioniert, bzw ob es etwas killt
+		if int(C.SCIONUDPDUALMODE) == 1 { //also check C-World socket's for incomming data
+			//log.Printf("(SCIONselect) ----> SCIONUDPDUALMODE enabled.... checking c-world")
+
+			var cRead syscall.FdSet
+			var cWrit syscall.FdSet
+			var cExec syscall.FdSet
+
+			cr := (*fdsetType)(unsafe.Pointer(&cRead))
+			cw := (*fdsetType)(unsafe.Pointer(&cWrit))
+			ce := (*fdsetType)(unsafe.Pointer(&cExec))
+
+			var ctimeout syscall.Timeval
+			ctimeout.Sec = 0
+			ctimeout.Usec = 0
+
+			//create a copy of c's fdset
+			for _, fdset := range fdsets {
+				/*var cause string
+				if !fdset.exists { //optimization: prevents fdstatus[fdset.fd] calls
+					cause = "c-world only socket"
+				}
+				if fdset.checkBothWorlds {
+					cause = "exists in both worlds"
+				}*/
+
+				var fdPtr uintptr
+				fdPtr = uintptr(fdset.fd)
+
+				if fdset.readSelected {
+					//log.Printf("(SCIONselect) ----> fd=%v %s with activated SCH_FILE_INPUT", fdset.fd, cause)
+					cr.Set(fdPtr)
+				}
+				if fdset.writeSelected {
+					//log.Printf("(SCIONselect) ----> fd=%v %s with activated SCH_FILE_OUTPUT", fdset.fd, cause)
+					cw.Set(fdPtr)
+				}
+				if fdset.exceptSelected {
+					//log.Printf("(SCIONselect) ----> fd=%v %s with activated SCH_FILE_EXCEPTION", fdset.fd, cause)
+					ce.Set(fdPtr)
+				}
+
+			}
+			//call select()
+			//log.Printf("(SCIONselect) ----> Before calling select: cRead=%v\n", cRead)
+			n, err := syscall.Select(int(nfds), &cRead, &cWrit, &cExec, &ctimeout)
+			//log.Printf("(SCIONselect) ----> After calling select: cRead=%v", cRead)
+			if err != nil {
+				log.Printf("(SCIONselect) ----> syscall.Select() returned n=%v err=%v", n, err)
+			}
+
+			//evaluate response
+			for _, fdset := range fdsets {
+				if !fdset.exists || fdset.checkBothWorlds {
+					var fdPtr uintptr
+					fdPtr = uintptr(fdset.fd)
+					var didSomeThing bool
+
+					if cr.IsSet(fdPtr) {
+						fdset.readReadyCworld = true
+						if fdset.readReady != true {
+							numOfBitsSet++
+							didSomeThing = true
+						}
+					}
+
+					if cw.IsSet(fdPtr) {
+						fdset.writeReadyCworld = true
+						if fdset.writeReady != true {
+							numOfBitsSet++
+							didSomeThing = true
+						}
+					}
+
+					if ce.IsSet(fdPtr) {
+						fdset.exceptReadyCworld = true
+						if fdset.exceptReady != true {
+							numOfBitsSet++
+							didSomeThing = true
+						}
+					}
+					if didSomeThing {
+						log.Printf("(SCIONselect) ----> evaluation for fd=%v r=%v w=%v e=%v", fdset.fd, fdset.readReadyCworld, fdset.writeReadyCworld, fdset.exceptReadyCworld)
+					}
+				}
+			}
+
 		}
 
 		//blocking means no timeout. The ticker is just here to prevent a busyloop
@@ -749,14 +854,26 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 			but it is not ready
 			=> we deactivate it
 		*/
-		if readfds != nil && fdset.readSelected && !fdset.readReady {
-			rset.Clr(fdPtr)
-		}
-		if writefds != nil && fdset.writeSelected && !fdset.writeReady {
-			wset.Clr(fdPtr)
-		}
-		if exceptfds != nil && fdset.exceptSelected && !fdset.exceptReady {
-			eset.Clr(fdPtr)
+		if int(C.SCIONUDPDUALMODE) == 1 {
+			if readfds != nil && fdset.readSelected && !fdset.readReady && !fdset.readReadyCworld {
+				rset.Clr(fdPtr)
+			}
+			if writefds != nil && fdset.writeSelected && !fdset.writeReady && !fdset.writeReadyCworld {
+				wset.Clr(fdPtr)
+			}
+			if exceptfds != nil && fdset.exceptSelected && !fdset.exceptReady && !fdset.exceptReadyCworld {
+				eset.Clr(fdPtr)
+			}
+		} else {
+			if readfds != nil && fdset.readSelected && !fdset.readReady {
+				rset.Clr(fdPtr)
+			}
+			if writefds != nil && fdset.writeSelected && !fdset.writeReady {
+				wset.Clr(fdPtr)
+			}
+			if exceptfds != nil && fdset.exceptSelected && !fdset.exceptReady {
+				eset.Clr(fdPtr)
+			}
 		}
 
 	}

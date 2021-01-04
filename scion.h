@@ -1,15 +1,18 @@
+#define SCIONUDPDUALMODE 1
+
+
+
 #define SENDNTPPERIP 1
 
 #define MSGBUFFERSIZE 100
 #define MSGBUFFERSIZESERVER 1000
-
 
 #define GODEBUG 1
 
 //#define MAX_RECV_MESSAGES 16
 #define VLEN 16 //corresponds to MAX_RECV_MESSAGES as defined in socket.c
 
-#define IOVLEN 1140
+#define IOVLEN 1140 //TODO variable machen bzw von chrony parsen... hängt von extensions ab
 
 #define IFINDEX 2 //solve this
 
@@ -115,8 +118,8 @@ typedef enum
 {
    NOT_CONNECTED = 0,
    CONNECTED_TO_NTP_SERVER,
-   IS_NTP_SERVER, //a socket to receive ntp packets as an NTP-Server (ChronyD acts as server)
-   IS_CMD_SOCKET, //a socket to receive cmd's from chronyC
+   IS_NTP_SERVER,           //a socket to receive ntp packets as an NTP-Server (ChronyD acts as server)
+   IS_CMD_SOCKET,           //a socket to receive cmd's from chronyC
    IS_CHRONY_STREAM_SOCKET, //doNotCreateScionSocket
    SOMETHING_ELSE
 } SCION_CONNECTION_TYPE; //rename this
@@ -129,7 +132,11 @@ typedef struct fdInfo
    int type;
    int protocol;
    int connectionType; //rename this
-   int noScionSocket; //>0 means there is no "socket" in scion
+   int socketType;  /*  >0 means there is no "socket" in scion. The value assigned can give a hint for the reason:
+                           SCION_socket(..."tcp"...)
+                           SCION_connect(..."notascionaddress"...)
+                           SCION_bind(...IS_CMD_SOCKET....)
+                        */
    IPSockAddr boundTo;
    char remoteAddress[MAXADDRESSLENGTH];
    char remoteAddressSCION[MAXADDRESSLENGTH];
@@ -150,7 +157,6 @@ void SCION_Initialise(void);
 void SCION_parse_source(char *line, char *type);
 
 void SCIONsetNtpPorts(int _ntpPort, int _cmdPort);
-
 
 /* Socket Operations */
 
@@ -234,4 +240,3 @@ int printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
 char *getClientSCIONAddress(char *address);
 
 char *getNTPServerSCIONAddress(char *address);
-
