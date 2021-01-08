@@ -58,6 +58,8 @@ go build -buildmode=c-shared -o scion_api.so *.go
 
 const pktLengtLayer2 = 90
 
+var idRoutineRead int
+
 //datastructure for SCIONselect
 type fdset struct {
 	fd                int
@@ -77,8 +79,10 @@ type fdset struct {
 //FDSTATUS contains EVERYTHING
 type FDSTATUS struct {
 	/*TODO: Decide how to use it/change it..... */
-	Fd    int         //fd corresponds to the socket number as used by chrony (could also be a pseudo fd)
-	Sinfo C.fdInfoPtr //Pointer to fdInfo c-Struct
+	idRoutineRead int
+	idRoutineSend int
+	Fd            int         //fd corresponds to the socket number as used by chrony (could also be a pseudo fd)
+	Sinfo         C.fdInfoPtr //Pointer to fdInfo c-Struct
 	//nonblocking        bool
 	//dgram              bool
 	sent               chan int //test entry: number of bytes sent
@@ -239,6 +243,8 @@ func SCIONgoconnect(_fd C.int) C.int {
 		return C.int(-1)
 	}
 
+	initScion()
+
 	var err error
 
 	s.remoteAddress = C.GoString(C.charPtr(unsafe.Pointer(&s.Sinfo.remoteAddress)))
@@ -253,17 +259,24 @@ func SCIONgoconnect(_fd C.int) C.int {
 	//s.ctx = context.Background()
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
-	s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
-	if err != nil {
-		log.Printf("(SCIONgoconnect) Failed to create SCION connector:", err)
-		return C.int(-1)
-	}
-	s.pds = &snet.DefaultPacketDispatcherService{
-		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
-		SCMPHandler: snet.DefaultSCMPHandler{
-			RevocationHandler: daemon.RevHandler{Connector: s.sdc},
-		},
-	}
+	s.sdc = sdc
+	/*
+		s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
+		if err != nil {
+			log.Printf("(SCIONgoconnect) Failed to create SCION connector:", err)
+			return C.int(-1)
+		}
+	*/
+
+	s.pds = pds
+	/*
+		s.pds = &snet.DefaultPacketDispatcherService{
+			Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
+			SCMPHandler: snet.DefaultSCMPHandler{
+				RevocationHandler: daemon.RevHandler{Connector: s.sdc},
+			},
+		}
+	*/
 
 	s.ps, err = s.sdc.Paths(s.ctx, s.rAddr.IA, localAddr.IA, daemon.PathReqFlags{Refresh: true})
 	if err != nil {
@@ -308,13 +321,44 @@ func SCIONgoconnect(_fd C.int) C.int {
 	return C.int(0) //TODO -1 for errors
 }
 
+var ScionStarted bool
+var sdc daemon.Connector
+var pds *snet.DefaultPacketDispatcherService
+
+func initScion() {
+	if ScionStarted {
+		return
+	}
+
+	/* Start the Daemon Service here: One for all?*/
+	var err error
+	sdc, err = daemon.NewService(sciondAddr).Connect(ctx)
+	if err != nil {
+		log.Printf("(initScion) Failed to create SCION connector:", err)
+		return
+	}
+
+	/* Start the Dispatcher Service here: One for all?*/
+	pds = &snet.DefaultPacketDispatcherService{
+		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
+		SCMPHandler: snet.DefaultSCMPHandler{
+			RevocationHandler: nil,
+		},
+	}
+
+	ScionStarted = true
+}
+
 //SCIONgobind Used to start recv Logic: now all socket options should be set
 //export SCIONstartntp
 func SCIONstartntp() C.int {
+	initScion()
 	for _, s := range fdstatus {
 		if s.isbound {
 			if !s.rcvLogicStarted {
 				s.rcvLogicStarted = true
+				idRoutineRead++
+				s.idRoutineRead = idRoutineRead
 				fdstatus[s.Fd] = s
 				catchMeGo := fdstatus[s.Fd]
 				log.Printf("(SCIONstartntp) Starting Rcv-Go-Routine for fd=%v", catchMeGo.Fd)
@@ -336,6 +380,8 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 		return C.int(-1)
 	}
 
+	initScion()
+
 	port := int(_port)
 
 	var err error
@@ -346,17 +392,24 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
-	s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
-	if err != nil {
-		log.Printf("(SCIONgobind) Failed to create SCION connector:", err)
-		return C.int(-1)
-	}
-	s.pds = &snet.DefaultPacketDispatcherService{
-		Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
-		SCMPHandler: snet.DefaultSCMPHandler{
-			RevocationHandler: daemon.RevHandler{Connector: s.sdc},
-		},
-	}
+	s.sdc = sdc
+	/*
+		s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
+		if err != nil {
+			log.Printf("(SCIONgobind) Failed to create SCION connector:", err)
+			return C.int(-1)
+		}
+	*/
+
+	s.pds = pds
+	/*
+		s.pds = &snet.DefaultPacketDispatcherService{
+			Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
+			SCMPHandler: snet.DefaultSCMPHandler{
+				RevocationHandler: daemon.RevHandler{Connector: s.sdc},
+			},
+		}
+	*/
 
 	//
 	bindAddr, err := snet.ParseUDPAddr(localAddrStr)
@@ -391,29 +444,42 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 }
 
 func (s *FDSTATUS) rcvLogic() {
-	log.Printf("(rcvLogic fd=%v) Started", s.Fd)
+	var nMessagesReceived int
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) Started", s.Fd, s.idRoutineRead)
+
 	for {
-		if cancelled(s.doneRcv) {
-			log.Printf("(rcvLogic fd=%v) I have been cancelled. Returning.", s.Fd)
-			break
-		}
+
+		/*
+			if cancelled(s.doneRcv) {
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) I have been cancelled. Returning.", s.Fd, s.idRoutineRead)
+				break
+			}
+		*/
 
 		var rcvMsgNTPTS rcvMsgNTPTS
 
-		//var pkt snet.Packet
-		//var ov net.UDPAddr
-		second := time.Now().Add(time.Second)
-		s.conn.SetReadDeadline(second)
-		//log.Printf("(rcvLogic fd=%v) Calling s.conn.ReadFrom()", s.Fd)
+		//Just here to find missing go-Routines
+		/*
+			second := time.Now().Add(1000 * time.Millisecond) //time.Time{}
+			s.conn.SetReadDeadline(second)
+		*/
+
+		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) Calling s.conn.ReadFrom() s.isNTPServer=%v nMessagesReceived=%v(until now)", s.Fd, s.idRoutineRead, s.isNTPServer, nMessagesReceived)
 		err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
-		//log.Printf("(rcvLogic fd=%v) \t|----> s.conn.ReadFrom() returned", s.Fd)
 		if err != nil {
-			//log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+			//checking if this was an error or if we have been cancelled
+			if cancelled(s.doneRcv) {
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) I have been cancelled. Returning.", s.Fd, s.idRoutineRead)
+				break
+			}
+			//TODO decide if we really want to continue
 			continue
 		}
+		nMessagesReceived++
 		fakeHardwareRxTime := time.Now() //HW time komplett anders
 		fakeKernelRxTime := time.Now()   //HW time komplett anders
-		log.Printf("(rcvLogic fd=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
+		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
 
 		//var ts3 C.struct_scm_timestamping
 
@@ -441,11 +507,23 @@ func (s *FDSTATUS) rcvLogic() {
 		}
 
 		/* the only thing really important comes here.. */
-		log.Printf("(rcvLogic fd=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd)
+		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
 		s.rcvQueueNTPTS <- rcvMsgNTPTS
 	}
 	s.rcvLogicStarted = false
-	log.Printf("(rcvLogic fd=%v) ----> Finished recv my message. Returning.", s.Fd)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
+	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
 
 }
 
@@ -534,7 +612,16 @@ func SCIONgoclose(_fd C.int) C.int {
 		return C.int(-1)
 	}
 	if s.doneRcv != nil {
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel")
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
+
 		close(s.doneRcv)
 	}
 	//todo: what else needs to be done?
@@ -542,13 +629,23 @@ func SCIONgoclose(_fd C.int) C.int {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.sdc != nil {
+
+	/*if s.sdc != nil {
 		//unklar ob dass alle connections killt... weil ich Backgroundcontext genommen habe,
 		s.sdc.Close(s.ctx)
+	}*/
+	if s.conn != nil {
+		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
+		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
+
+		s.conn.Close()
 	}
 
 	//close dispatcher???? s.pds
-
+	//time.Sleep(6 * time.Second)
 	delete(fdstatus, int(fd))
 
 	//TODO close() returns zero on success.  On error, -1 is returned, and errno
@@ -612,11 +709,15 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 	var blocking bool
 	var t time.Duration
 	var ticker <-chan time.Time
+
 	var tickTime time.Duration
 	if timeout == nil {
 		log.Printf("timeout seems to be NULL => select() will block indefinitely")
 		blocking = true
 		tickTime = 500 * time.Millisecond
+
+		//tickTime = 2 * time.Second
+
 		ticker = time.Tick(tickTime)
 	} else {
 		tvsec = timeout.tv_sec
@@ -626,6 +727,12 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		if tickTime > 500*time.Millisecond {
 			tickTime = 500 * time.Millisecond
 		}
+
+		lowerBound := time.Duration(300)
+		if tickTime < lowerBound*time.Millisecond {
+			tickTime = lowerBound * time.Millisecond
+		}
+
 		ticker = time.Tick(tickTime)
 	}
 
@@ -658,7 +765,8 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		s, exists := fdstatus[fd] //we can ignore them: Assumption: We are still in chronyd's main thread => while we are in SCIONselect, there cannot be created any new states. If this is not true anymore, check it at the beginning of the loop. Relevant for very long running timeouts.
 		if exists {
 			if s.isNTPServer {
-				checkBothWorlds = true
+				//checkBothWorlds = true
+				log.Printf("(SCIONselect) ACHTUNG: checkBothWorlds kann für NTP Server nicht aktiviert werden, da recv (noch) nicht vorbereitet")
 			}
 		}
 		var rIsSet, eIsSet, wIsSet bool
@@ -677,7 +785,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 			fdsets = append(fdsets,
 				&fdset{
 					fd:                fd,
-					exists:            exists,          //if they don't exist => c-Sockets
+					exists:            exists,          //if they don't exist => must be a c-Sockets
 					checkBothWorlds:   checkBothWorlds, //also check c-Sockets
 					readSelected:      rIsSet,
 					writeSelected:     wIsSet,
@@ -693,8 +801,14 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 
 	}
 
+	if int(C.SCIONUDPDUALMODE) == 1 {
+		log.Printf("(SCIONselect) ----> SCIONUDPDUALMODE enabled.... checking c-world")
+	}
+
 	numOfBitsSet := 0
 	for {
+
+		startSelect := time.Now()
 
 		numOfBitsSet = 0 //numOfBitsSet is always zero here
 
@@ -738,8 +852,9 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		//Prüfe aktuell einfach Sockets die nur in C-Bestehen => fdset.exists sollte nicht bestehen
 		//Todo prüfe ob das mit dem rückschreiben so funktioniert, bzw ob es etwas killt
 		if int(C.SCIONUDPDUALMODE) == 1 { //also check C-World socket's for incomming data
-			//log.Printf("(SCIONselect) ----> SCIONUDPDUALMODE enabled.... checking c-world")
+			log.Printf("(SCIONselect) ----> SCIONUDPDUALMODE enabled.... checking c-world")
 
+			//GOlang FD_ZERO() needed?
 			var cRead syscall.FdSet
 			var cWrit syscall.FdSet
 			var cExec syscall.FdSet
@@ -825,11 +940,14 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 
 		}
 
+		selectDuration := time.Now()
+		elapsed := selectDuration.Sub(startSelect)
+
 		//blocking means no timeout. The ticker is just here to prevent a busyloop
 		if numOfBitsSet == 0 && (time.Since(start) < t || blocking) {
 			//Sleep
+			log.Printf("(SCIONselect) Waiting for next tick.... highestFd=%v timeout=%v tickTime=%v Select-execution-took=%v", highestFd, t, tickTime, elapsed)
 			<-ticker
-			//log.Printf("(SCIONselect) received a tick.... starting over")
 		} else {
 			//we have at least 1 bit set and can return
 			break
@@ -894,6 +1012,11 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAdd
 		log.Printf("(SCIONgosendmsg) Starting Rcv-Go-Routine !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
 		s := fdstatus[fd]
 		s.rcvLogicStarted = true
+		idRoutineRead++
+		if s.idRoutineRead != 0 {
+			log.Fatal("(SCIONgosendmsg) There is already a rcvLogic() running fdstatus[%d] idRoutineRead=%v\n", fd, idRoutineRead)
+		}
+		s.idRoutineRead = idRoutineRead
 		fdstatus[fd] = s
 		go s.rcvLogic()
 	}
@@ -1138,6 +1261,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			for i := 0; i < 256 && i < msgContrLen; i++ { //Quasi memset einfach ohne C-call (Prüfe was schneller ist)
 				bufferPtrDelete[i] = 0x00
 			}
+			log.Printf("%v", bufferPtrDelete)
 
 			msghdr.msg_namelen = C.uint(0)
 			//msghdr.msg_name is null

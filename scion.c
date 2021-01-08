@@ -1076,8 +1076,8 @@ int SCION_select(int __nfds, fd_set *__restrict __readfds,
     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
     DEBUG_LOG("SCION_select(...) ACHTUNG DAS IST C-SELECT!!!");
-    int n = select(__nfds, __readfds, __writefds, __exceptfds, __timeout);*/
-
+    int n = select(__nfds, __readfds, __writefds, __exceptfds, __timeout);
+*/
     DEBUG_LOG("SCION_select(...) found %d ready fd's", n);
 
     //Debug stuff
