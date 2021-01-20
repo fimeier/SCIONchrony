@@ -69,7 +69,7 @@
 
 #ifndef _SCION_API_H
 #define _SCION_API_H
-#include "scion_api.h"
+#include "scion/go/scion_api.h"
 #endif
 
 //#define NTP_PORT 123

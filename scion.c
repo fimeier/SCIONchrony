@@ -200,6 +200,7 @@ ATTENTION:      i)      NTP Server has in normal mode just RX activated
                 ii)     SOF_TIMESTAMPING_OPT_TX_SWHW is always set as part of ts_flags (assuming program logic)
                 iii)    As a Client RX|TX is activated
                 iv)     some of the settings are also (have to be) activated during NIO_Linux_Initialise()::add_interface() 
+                v)      SIEHE UGLY HACK: Beim senden wird explizit TS für einzelnes Paket angefordert
 
 RX:
     SOF_TIMESTAMPING_SOFTWARE       <=> REPORT any software timestamps when available.
@@ -233,7 +234,7 @@ bit returns EINVAL and does not change the current state.
 The socket option configures timestamp generation for individual
 sk_buffs (1.3.1), timestamp reporting to the socket's error
 queue (1.3.2) and options (1.3.3). Timestamp generation can also
-be enabled for individual sendmsg calls using cmsg (1.3.4).
+be enabled for individual sendmsg calls using cmsg (1.3.4). <= z.B. für interleaved Mode nötig!
 
 */
 

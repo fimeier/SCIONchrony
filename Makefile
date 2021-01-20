@@ -54,16 +54,17 @@ ALL_OBJS = $(OBJS) $(CLI_OBJS)
 LIBS =  -lm -lnettle -lgnutls
 EXTRA_LIBS =  -lcap
 EXTRA_CLI_LIBS =  
-EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion_api.so#SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
-
+EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion/go/scion_api.so#SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
 
 # Until we have a main procedure we can link, just build object files
 # to test compilation
 
 all : go chronyd chronyc
 
+# There are some funky circular dependencies
+# I guess building and linking should be separated
 go : 
-	go build -buildmode=c-shared -o scion_api.so *.go
+	go build -buildmode=c-shared -o scion/go/scion_api.so scion/go/*.go
 	go build sciontest/SCIONclient2ntpserver/SCIONclient2ntpserver.go
 	go build sciontest/ntpclient2SCIONserver/ntpclient2SCIONserver.go
 
@@ -86,6 +87,7 @@ clean :
 	-rm -rf .deps
 	-rm -rf *.dSYM
 	go clean --cache
+	-rm scion/go/scion_api.h scion/go/scion_api.so
 
 getdate.c : getdate.y
 	bison -o getdate.c getdate.y
