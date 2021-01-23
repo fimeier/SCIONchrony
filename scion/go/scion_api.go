@@ -467,12 +467,13 @@ func (s *FDSTATUS) rcvLogic() {
 		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) Calling s.conn.ReadFrom() s.isNTPServer=%v nMessagesReceived=%v(until now)", s.Fd, s.idRoutineRead, s.isNTPServer, nMessagesReceived)
 		err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
 		if err != nil {
-			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
+
 			//checking if this was an error or if we have been cancelled
 			if cancelled(s.doneRcv) {
 				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) I have been cancelled. Returning.", s.Fd, s.idRoutineRead)
 				break
 			}
+			log.Printf("(rcvLogic fd=%v) \t---->Failed to read packet: %v", s.Fd, err)
 			//TODO decide if we really want to continue
 			continue
 		}

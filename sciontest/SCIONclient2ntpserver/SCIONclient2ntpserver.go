@@ -176,7 +176,7 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 
 		err = conn.WriteTo(pktResponse, reversePathUnderlayNextHop) //sp.UnderlayNextHop())
 		if err != nil {
-			log.Printf("\t---->[%d] Failed to write packet: %v\n", err)
+			log.Printf("\t---->Failed to write packet: %v\n", err)
 		}
 
 	}
