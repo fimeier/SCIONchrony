@@ -1,4 +1,8 @@
 #include "scion.h"
+#ifndef _SCION_API_H
+#define _SCION_API_H
+#include "scion/go/scion_api.h"
+#endif
 
 //static int socked_mapping[1024];
 
@@ -150,21 +154,6 @@ void SCION_Initialise(void)
     //start the receive logic for the ntp server: at this moment all socket options should be set
     SCIONstartntp();
 
-    //memset(socked_mapping, 0, 1024 * sizeof(int)); //needed?
-
-    //workaround... fix this ugly construct
-    /* //now as configuration: SCION server 10.80.45.128:123 1-ff00:0:110,10.80.45.83:11111
-    addressMapping *server = calloc(1, sizeof(addressMapping));
-    strcpy(server->addressIP, "10.80.45.128:123");
-    strcpy(server->addressSCION, "1-ff00:0:110,10.80.45.83:11111");
-    ntpServers[0] = server;
-
-    server = calloc(1, sizeof(addressMapping));
-    strcpy(server->addressIP, "85.195.227.162:123");
-    strcpy(server->addressSCION, "1-ff00:0:110,10.80.45.83:22222");
-    ntpServers[1] = server;
-    */
-
     /*
     Echte Clients werden dann über GO empfangen und daher auch von dort registriert
     =>Fraglich inwiefern/welche Infos hier verfügbar sein sollen
@@ -265,7 +254,7 @@ int SCION_socket(int __domain, int __type, int __protocol)
     DEBUG_LOG("Creating socket with domain=%d type=%d protocol=%d", __domain, __type, __protocol);
     int fd = socket(__domain, __type, __protocol);
 
-    /*
+/*
 NTS
 Creating socket with domain=2 (ok) type=526337 protocol=0
 */

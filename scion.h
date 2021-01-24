@@ -67,10 +67,10 @@
 #include <arpa/inet.h>
 #include <sys/random.h>
 
-#ifndef _SCION_API_H
-#define _SCION_API_H
-#include "scion/go/scion_api.h"
-#endif
+//#ifndef _SCION_API_H
+//#define _SCION_API_H
+//#include "scion/go/scion_api.h"
+//#endif
 
 //#define NTP_PORT 123
 

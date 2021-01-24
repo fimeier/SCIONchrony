@@ -56,13 +56,19 @@ EXTRA_LIBS =  -lcap
 EXTRA_CLI_LIBS =  
 EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion/go/scion_api.so#SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
 
+
+
 # Until we have a main procedure we can link, just build object files
 # to test compilation
 
 all : go chronyd chronyc
+	@echo "****REMARK*****\nBuild it twice to get rid of missing include scion/go/scion_api.h"
 
 # There are some funky circular dependencies
 # I guess building and linking should be separated
+# Maybe it isn't possible, as the scion_api.h file is created by cgo, AFTER we need it
+
+# HINT: go.mod needs to be in chronys root folder
 go : 
 	go build -buildmode=c-shared -o scion/go/scion_api.so scion/go/*.go
 	go build sciontest/SCIONclient2ntpserver/SCIONclient2ntpserver.go

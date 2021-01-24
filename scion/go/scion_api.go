@@ -113,10 +113,11 @@ type FDSTATUS struct {
 }
 
 type rcvMsgNTPTS struct {
-	tsType int         //TS type.... not needed?
-	pkt    snet.Packet //call like this should never fail (is checked befor added): rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
-	ov     net.UDPAddr
-	ts3    C.struct_scm_timestamping
+	tsType int //TS type.... not needed?
+	//Todo Change to pointer?
+	pkt snet.Packet //call like this should never fail (is checked befor added): rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+	ov  net.UDPAddr
+	ts3 C.struct_scm_timestamping
 }
 
 /* Remark: ts3 have to be separated (if HW-TS isn't accepted, chrony's logic drops packets without considering Kernel TS in it)
@@ -127,7 +128,7 @@ type sendMsgTS struct {
 	pkt    *snet.Packet
 	//payload []byte
 	ts3    C.struct_scm_timestamping
-	sentTo *snet.UDPAddr
+	sentTo *snet.UDPAddr //wird das jemals ausgelesen?
 }
 
 const (
@@ -295,7 +296,8 @@ func SCIONgoconnect(_fd C.int) C.int {
 	s.rAddr.Path = s.selectedPath.Path()
 	s.rAddr.NextHop = s.selectedPath.UnderlayNextHop()
 
-	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, addr.SvcNone)
+	//TODO Art der TS's ist hier eigneltich nciht klar....
+	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, addr.TxKernelHwRxKernelHw)
 	if err != nil {
 		log.Printf("(SCIONgoconnect)  Failed to register client socket: %v", err)
 		return C.int(-1)
@@ -418,8 +420,8 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 		return C.int(-1) //should never return
 	}
 	bindAddr.Host.Port = port //set the correct port
-
-	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, bindAddr.IA, bindAddr.Host, addr.SvcNone)
+	//TODO: Hier ist nicht klar welche Art von Timestamps aktiviert werden sollen
+	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, bindAddr.IA, bindAddr.Host, addr.TxKernelHwRxKernelHw)
 	if err != nil {
 		log.Printf("(SCIONgobind)  Failed to register client socket:  %v", err)
 		return C.int(-1)
@@ -445,17 +447,11 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 
 func (s *FDSTATUS) rcvLogic() {
 	var nMessagesReceived int
+	var nErrQueueMsgsReceived int
+
 	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) Started", s.Fd, s.idRoutineRead)
 
 	for {
-
-		/*
-			if cancelled(s.doneRcv) {
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) I have been cancelled. Returning.", s.Fd, s.idRoutineRead)
-				break
-			}
-		*/
-
 		var rcvMsgNTPTS rcvMsgNTPTS
 
 		//Just here to find missing go-Routines
@@ -464,7 +460,7 @@ func (s *FDSTATUS) rcvLogic() {
 			s.conn.SetReadDeadline(second)
 		*/
 
-		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) Calling s.conn.ReadFrom() s.isNTPServer=%v nMessagesReceived=%v(until now)", s.Fd, s.idRoutineRead, s.isNTPServer, nMessagesReceived)
+		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) Calling s.conn.ReadFrom() s.isNTPServer=%v nMessagesReceived=%v nErrQueueMsgsReceived=%v(until now)", s.Fd, s.idRoutineRead, s.isNTPServer, nMessagesReceived, nErrQueueMsgsReceived)
 		err := s.conn.ReadFrom(&rcvMsgNTPTS.pkt, &rcvMsgNTPTS.ov)
 		if err != nil {
 
@@ -477,41 +473,93 @@ func (s *FDSTATUS) rcvLogic() {
 			//TODO decide if we really want to continue
 			continue
 		}
-		nMessagesReceived++
-		fakeHardwareRxTime := time.Now() //HW time komplett anders
-		fakeKernelRxTime := time.Now()   //HW time komplett anders
-		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
-
-		//var ts3 C.struct_scm_timestamping
-
-		if s.rxKERNELts {
-			rcvMsgNTPTS.tsType = tskernel
-			//kernel ts
-			rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(fakeKernelRxTime.Unix())
-			rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(fakeKernelRxTime.UnixNano() - fakeKernelRxTime.Unix()*1e9)
-		}
-
-		if s.rxHWts {
-			rcvMsgNTPTS.tsType = tshardware
-			if s.rxKERNELts {
-				rcvMsgNTPTS.tsType = tskernelhardware
+		if rcvMsgNTPTS.ov.IP == nil {
+			//err queue msg... this is a TX timestamp
+			nErrQueueMsgsReceived++
+			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received ERR_QUEUE_MSG", s.Fd, s.idRoutineRead)
+			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> KS-TS=%v HW-TS=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.pkt.KernelTS, rcvMsgNTPTS.pkt.HwTS)
+			if rcvMsgNTPTS.pkt.KernelTS.Sec == 0 {
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> missing kernel ts", s.Fd, s.idRoutineRead)
 			}
-			//kernel ts
-			rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(fakeHardwareRxTime.Unix())
-			rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(fakeHardwareRxTime.UnixNano() - fakeHardwareRxTime.Unix()*1e9)
-		}
 
-		//Needed? If the payload can be extracted there should be a message
-		_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
-		if !ok {
-			continue //return //continue
-		}
+			var msgTS sendMsgTS
 
-		/* the only thing really important comes here.. */
-		log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
-		s.rcvQueueNTPTS <- rcvMsgNTPTS
+			//Needed? If the payload can be extracted there should be a message
+			_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+			if !ok {
+				continue //return //continue
+			}
+
+			msgTS.pkt = &rcvMsgNTPTS.pkt
+			//msgTS.payload = payload
+			msgTS.sentTo = nil
+
+			if s.txKERNELts {
+				msgTS.tsType = tskernel //not needed
+				var ts3 C.struct_scm_timestamping
+				//kernel ts
+				ts3.ts[0].tv_sec = C.long(rcvMsgNTPTS.pkt.KernelTS.Sec)
+				ts3.ts[0].tv_nsec = C.long(rcvMsgNTPTS.pkt.KernelTS.Nsec)
+				msgTS.ts3 = ts3
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Kernel)=%v", s.Fd, s.idRoutineRead, ts3)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS", s.Fd, s.idRoutineRead)
+				s.sendQueueTS <- msgTS
+			}
+			if s.txHWts {
+				msgTS.tsType = tshardware //not needed
+				var ts3 C.struct_scm_timestamping
+				//hardware ts
+				ts3.ts[2].tv_sec = C.long(rcvMsgNTPTS.pkt.HwTS.Sec)
+				ts3.ts[2].tv_nsec = C.long(rcvMsgNTPTS.pkt.HwTS.Nsec)
+				msgTS.ts3 = ts3
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(HW)=%v", s.Fd, s.idRoutineRead, ts3)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS", s.Fd, s.idRoutineRead)
+				s.sendQueueTS <- msgTS
+			}
+
+		} else {
+			// a real message
+			nMessagesReceived++
+			//fakeHardwareRxTime := time.Now() //HW time komplett anders
+			//fakeKernelRxTime := time.Now()   //HW time komplett anders
+			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
+
+			//Needed? If the payload can be extracted there should be a message
+			_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
+			if !ok {
+				continue //return //continue
+			}
+
+			//var ts3 C.struct_scm_timestamping
+
+			if s.rxKERNELts {
+				rcvMsgNTPTS.tsType = tskernel
+				//kernel ts
+				rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(rcvMsgNTPTS.pkt.KernelTS.Sec)
+				rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(rcvMsgNTPTS.pkt.KernelTS.Nsec)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Kernel)=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.ts3)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS", s.Fd, s.idRoutineRead)
+			}
+
+			if s.rxHWts {
+				rcvMsgNTPTS.tsType = tshardware
+				if s.rxKERNELts {
+					rcvMsgNTPTS.tsType = tskernelhardware
+				}
+				//hw ts
+				rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(rcvMsgNTPTS.pkt.HwTS.Sec)
+				rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(rcvMsgNTPTS.pkt.HwTS.Nsec)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Hw)=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.ts3)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS", s.Fd, s.idRoutineRead)
+			}
+
+			/* the only thing really important comes here.. */
+			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
+			s.rcvQueueNTPTS <- rcvMsgNTPTS
+		}
 	}
 	s.rcvLogicStarted = false
+	//Make some noise, I want to be seen in the logfile
 	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
 	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
 	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
@@ -1085,15 +1133,17 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 		s.sent <- int(iovecLen)
 	}
 
-	if s.createTxTimestamp {
-		log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps", s.Fd)
-	}
+	/*
+		if s.createTxTimestamp {
+			log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps", s.Fd)
+		}
 
-	var uglyKernelTS bool
-	if uglyHack == (int(C.SOF_TIMESTAMPING_TX_SOFTWARE | C.SOF_TIMESTAMPING_TX_HARDWARE)) {
-		log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps because it is specific requested for this packet", s.Fd)
-		uglyKernelTS = true
-	}
+		var uglyKernelTS bool
+		if uglyHack == (int(C.SOF_TIMESTAMPING_TX_SOFTWARE | C.SOF_TIMESTAMPING_TX_HARDWARE)) {
+			log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps because it is specific requested for this packet", s.Fd)
+			uglyKernelTS = true
+		}
+	*/
 
 	payload := C.GoBytes(unsafe.Pointer(iovecBase), C.int(iovecLen))
 
@@ -1129,8 +1179,8 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 	}
 
 	//ALWAYS create TX timestamp..--- change this
-	fakeKernelSentTime := time.Now()   //HW time komplett anders
-	fakeHardwareSentTime := time.Now() //HW time komplett anders
+	//fakeKernelSentTime := time.Now()   //HW time komplett anders
+	//fakeHardwareSentTime := time.Now() //HW time komplett anders
 	err = conn.WriteTo(pkt, remoteAddr.NextHop)
 	if err != nil {
 		log.Printf("(sendmsgOverScion) [fd=%d] Failed to write packet: %v\n", s.Fd, err)
@@ -1143,43 +1193,51 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 		s.sent <- int(iovecLen)
 	}
 
-	sendMsg := false
-	var msgTS sendMsgTS
+	/*
+			THis disables the timestamps.... now we use the one received from scionproto
+			THis disables the timestamps.... now we use the one received from scionproto
+			THis disables the timestamps.... now we use the one received from scionproto
+			THis disables the timestamps.... now we use the one received from scionproto
+			THis disables the timestamps.... now we use the one received from scionproto
+		sendMsg := false
+		var msgTS sendMsgTS
 
-	sendMsg = true
-	msgTS.pkt = pkt
-	//msgTS.payload = payload
-	msgTS.sentTo = remoteAddr
-
-	//add TS's: Src needs to be adpted afte SCION provides the correct TS's
-	if s.txKERNELts || uglyKernelTS {
-		msgTS.tsType = tskernel //not needed
 		sendMsg = true
-		var ts3 C.struct_scm_timestamping
-		//kernel ts
-		ts3.ts[0].tv_sec = C.long(fakeKernelSentTime.Unix())
-		ts3.ts[0].tv_nsec = C.long(fakeKernelSentTime.UnixNano() - fakeKernelSentTime.Unix()*1e9)
-		log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(Kernel)=%v", s.Fd, ts3)
-		msgTS.ts3 = ts3
-		log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
-		s.sendQueueTS <- msgTS
-	}
-	if s.txHWts {
-		msgTS.tsType = tshardware //not needed
-		sendMsg = true
-		var ts3 C.struct_scm_timestamping
-		//hardware ts
-		ts3.ts[2].tv_sec = C.long(fakeHardwareSentTime.Unix())
-		ts3.ts[2].tv_nsec = C.long(fakeHardwareSentTime.UnixNano() - fakeHardwareSentTime.Unix()*1e9)
-		log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(HW)=%v", s.Fd, ts3)
-		msgTS.ts3 = ts3
-		log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
-		s.sendQueueTS <- msgTS
-	}
+		msgTS.pkt = pkt
+		//msgTS.payload = payload
+		msgTS.sentTo = remoteAddr
 
-	if !sendMsg {
-		log.Printf("(sendmsgOverScion fd=%v) Will not create any messages for Timestamps.", s.Fd)
-	}
+		//add TS's: Src needs to be adpted afte SCION provides the correct TS's
+		if s.txKERNELts || uglyKernelTS {
+			msgTS.tsType = tskernel //not needed
+			sendMsg = true
+			var ts3 C.struct_scm_timestamping
+			//kernel ts
+			ts3.ts[0].tv_sec = C.long(fakeKernelSentTime.Unix())
+			ts3.ts[0].tv_nsec = C.long(fakeKernelSentTime.UnixNano() - fakeKernelSentTime.Unix()*1e9)
+			log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(Kernel)=%v", s.Fd, ts3)
+			msgTS.ts3 = ts3
+			log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
+			s.sendQueueTS <- msgTS
+		}
+		if s.txHWts {
+			msgTS.tsType = tshardware //not needed
+			sendMsg = true
+			var ts3 C.struct_scm_timestamping
+			//hardware ts
+			ts3.ts[2].tv_sec = C.long(fakeHardwareSentTime.Unix())
+			ts3.ts[2].tv_nsec = C.long(fakeHardwareSentTime.UnixNano() - fakeHardwareSentTime.Unix()*1e9)
+			log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(HW)=%v", s.Fd, ts3)
+			msgTS.ts3 = ts3
+			log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
+			s.sendQueueTS <- msgTS
+		}
+
+		if !sendMsg {
+			log.Printf("(sendmsgOverScion fd=%v) Will not create any messages for Timestamps.", s.Fd)
+		}
+	*/
+
 	log.Printf("(sendmsgOverScion) \t----->Done")
 }
 
@@ -1230,7 +1288,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 	log.Printf("(SCIONgorecvmmsg) ----> number of received ERROR-messages on fd=%v is %v", fd, nErrorMsg)
 
 	//TODO VLEN check
-	//PORT IP,....
+	//PORT IP,... .
 	updatedElemmsgvec := 0
 	if returnTxTS && nErrorMsg > 0 {
 		//TODO Länge der Daten setzen..
@@ -1635,203 +1693,7 @@ func main() {
 }
 
 /*
-func PingSomething() error {
-	fmt.Println("I ping something now because I can")
-
-	count := uint16(1)
-	sciondAddress := sciond.DefaultAPIAddress
-	dispatcher := reliable.DefaultDispPath
-	interval := time.Second
-	timeout := time.Second
-	interactive := false
-	refresh := false
-	sequence := ""
-	noColor := false
-	var localString net.IP
-	remoteString := "1-ff00:0:110,10.80.45.83"
-	size := 0
-
-	remote, err := snet.ParseUDPAddr(remoteString)
-	if err != nil {
-		return serrors.WrapStr("parsing remote", err)
-	}
-
-	ctx, cancelF := context.WithTimeout(context.Background(), time.Second*3600) //mefi84 *3600 added
-	defer cancelF()
-	sd, err := sciond.NewService(sciondAddress).Connect(ctx)
-	if err != nil {
-		return serrors.WrapStr("connecting to SCION Daemon", err)
-	}
-
-	info, err := app.QueryASInfo(context.Background(), sd)
-	if err != nil {
-		return err
-	}
-
-	path, err := app.ChoosePath(context.Background(), sd, remote.IA,
-		interactive, refresh, sequence,
-		app.WithDisableColor(noColor))
-	if err != nil {
-		return err
-	}
-	remote.Path = path.Path()
-	remote.NextHop = path.UnderlayNextHop()
-
-	localIP := localString
-	if localIP == nil {
-		target := remote.Host.IP
-		if remote.NextHop != nil {
-			target = remote.NextHop.IP
-		}
-		if localIP, err = addrutil.ResolveLocal(target); err != nil {
-			return serrors.WrapStr("resolving local address", err)
-
-		}
-		fmt.Printf("Resolved local address:\n  %s\n", localIP)
-	}
-	fmt.Printf("Using path:\n  %s\n\n", path)
-	local := &snet.UDPAddr{
-		IA:   info.IA,
-		Host: &net.UDPAddr{IP: localIP},
-	}
-
-	stats, err := ping.Run(ctx, ping.Config{
-		Dispatcher:  reliable.NewDispatcher(dispatcher),
-		Attempts:    count,
-		Interval:    interval,
-		Timeout:     timeout,
-		Local:       local,
-		Remote:      remote,
-		PayloadSize: int(size),
-		ErrHandler: func(err error) {
-			fmt.Fprintf(os.Stderr, "ERROR: %s\n", err)
-		},
-		UpdateHandler: func(update ping.Update) {
-			var additional string
-			switch update.State {
-			case ping.AfterTimeout:
-				additional = " state=After timeout"
-			case ping.OutOfOrder:
-				additional = " state=Out of Order"
-			case ping.Duplicate:
-				additional = " state=Duplicate"
-			}
-			fmt.Fprintf(os.Stdout, "%d bytes from %s,%s: scmp_seq=%d time=%s%s\n",
-				update.Size, update.Source.IA, update.Source.Host, update.Sequence,
-				update.RTT, additional)
-		},
-	})
-
-	fmt.Println("%v", stats)
-
-	return nil
-}
-*/
-
-/*
-//export SendSomething
-func SendSomething() error {
-	fmt.Println("I send something now because I can")
-
-	//count := uint16(1)
-	sciondAddress := sciond.DefaultAPIAddress
-	dispatcher := reliable.DefaultDispPath
-	//interval := time.Second
-	//timeout := time.Second
-	interactive := false
-	refresh := false
-	sequence := ""
-	noColor := false
-	var localString net.IP
-	remoteString := "1-ff00:0:110,10.80.45.83:11111"
-	//size := 0
-
-	remote, err := snet.ParseUDPAddr(remoteString)
-	if err != nil {
-		return serrors.WrapStr("parsing remote", err)
-	}
-
-	ctx, cancelF := context.WithTimeout(context.Background(), time.Second*3600) //mefi84 *3600 added
-	defer cancelF()
-	sd, err := sciond.NewService(sciondAddress).Connect(ctx)
-	if err != nil {
-		return serrors.WrapStr("connecting to SCION Daemon", err)
-	}
-
-	info, err := app.QueryASInfo(context.Background(), sd)
-	if err != nil {
-		return err
-	}
-
-	path, err := app.ChoosePath(context.Background(), sd, remote.IA,
-		interactive, refresh, sequence,
-		app.WithDisableColor(noColor))
-	if err != nil {
-		return err
-	}
-	remote.Path = path.Path()
-	remote.NextHop = path.UnderlayNextHop()
-
-	localIP := localString
-	if localIP == nil {
-		target := remote.Host.IP
-		if remote.NextHop != nil {
-			target = remote.NextHop.IP
-		}
-		if localIP, err = addrutil.ResolveLocal(target); err != nil {
-			return serrors.WrapStr("resolving local address", err)
-
-		}
-		fmt.Printf("Resolved local address:\n  %s\n", localIP)
-	}
-	fmt.Printf("Using path:\n  %s\n\n", path)
-	local := &snet.UDPAddr{
-		IA: info.IA,
-		Host: &net.UDPAddr{IP: localIP,
-			Port: 0}, //or client's use automatic port
-	}
-
-	svc := snet.DefaultPacketDispatcherService{
-		Dispatcher:  reliable.NewDispatcher(dispatcher),
-		SCMPHandler: snet.DefaultSCMPHandler{},
-	}
-	conn, port, err := svc.Register(ctx, local.IA, local.Host, addr.SvcNone)
-	if err != nil {
-		log.Fatal("Failed to register client socket:", err)
-	}
-
-	log.Printf("Sending in %v on %v:%d - %v\n", local.IA, local.Host.IP, port, addr.SvcNone)
-
-	pkt := &snet.Packet{
-		PacketInfo: snet.PacketInfo{
-			Source: snet.SCIONAddress{
-				IA:   local.IA,
-				Host: addr.HostFromIP(local.Host.IP),
-			},
-			Destination: snet.SCIONAddress{
-				IA:   remote.IA,
-				Host: addr.HostFromIP(remote.Host.IP),
-			},
-			Path: remote.Path,
-			Payload: snet.UDPPayload{
-				SrcPort: port,
-				DstPort: uint16(remote.Host.Port),
-				Payload: []byte("Hello, world!"),
-			},
-		},
-	}
-
-	err = conn.WriteTo(pkt, remote.NextHop)
-	if err != nil {
-		log.Printf("[%d] Failed to write packet: %v\n", err)
-	}
-
-	return nil
-
-}
-*/
-
-/*func GetFreeFD() int {
+func GetFreeFD() int {
 	for fd := 1; fd <= maxFD; fd++ {
 		if fdList[fd] == 0 {
 			fdList[fd] = 1
@@ -1840,8 +1702,11 @@ func SendSomething() error {
 
 	}
 	return -1
-}*/
+}
+*/
 
-/*func DeleteFD(fd int) {
+/*
+func DeleteFD(fd int) {
 	fdList[fd] = 0
-}*/
+}
+*/
