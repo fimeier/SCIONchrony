@@ -269,7 +269,7 @@ Creating socket with domain=2 (ok) type=526337 protocol=0
     sinfo->protocol = __protocol;
     sinfo->connectionType = NOT_CONNECTED;
 
-    sinfo->if_index = IFINDEX;
+    sinfo->if_index = IFINDEX; //not used anymore
 
     if (DEBUG)
     {

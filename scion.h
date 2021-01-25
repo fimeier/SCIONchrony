@@ -14,7 +14,7 @@
 
 #define IOVLEN 1140 //TODO variable machen bzw von chrony parsen... hängt von extensions ab
 
-#define IFINDEX 2 //solve this
+#define IFINDEX 666 //solve this. Okay :-D
 
 #include "config.h"
 #include "logging.h"

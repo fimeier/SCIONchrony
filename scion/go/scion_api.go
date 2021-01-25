@@ -118,6 +118,25 @@ type rcvMsgNTPTS struct {
 	pkt snet.Packet //call like this should never fail (is checked befor added): rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
 	ov  net.UDPAddr
 	ts3 C.struct_scm_timestamping
+
+	//use this once finished... Ide is struggling on chrony with nested structs in cgo projects
+	//--->common.PacketTSExtensionClient<-----
+
+	KernelTS syscall.Timespec
+	// HwTS contains a hardware timestamp
+	HwTS syscall.Timespec
+	// InterfaceID is equal to struct scm_ts_pktinfo.if_index (if in use)
+	//
+	// Rx timestamps will fill this in
+	InterfaceID uint32
+	// PktLengthL2 is equal to struct scm_ts_pktinfo.pkt_length (if in use)
+	//
+	// Rx timestamps will fill this in
+	PktLengthL2 uint32
+	// Ipi is equal to Inet4Pktinfo struct
+	//
+	// Hint: Using Ipi.Ifindex as this used by Rx AND Tx timestamps
+	Ipi syscall.Inet4Pktinfo
 }
 
 /* Remark: ts3 have to be separated (if HW-TS isn't accepted, chrony's logic drops packets without considering Kernel TS in it)
@@ -129,6 +148,25 @@ type sendMsgTS struct {
 	//payload []byte
 	ts3    C.struct_scm_timestamping
 	sentTo *snet.UDPAddr //wird das jemals ausgelesen?
+
+	//use this once finished... Ide is struggling on chrony with nested structs in cgo projects
+	//--->common.PacketTSExtensionClient<-----
+
+	KernelTS syscall.Timespec
+	// HwTS contains a hardware timestamp
+	HwTS syscall.Timespec
+	// InterfaceID is equal to struct scm_ts_pktinfo.if_index (if in use)
+	//
+	// Rx timestamps will fill this in
+	InterfaceID uint32
+	// PktLengthL2 is equal to struct scm_ts_pktinfo.pkt_length (if in use)
+	//
+	// Rx timestamps will fill this in
+	PktLengthL2 uint32
+	// Ipi is equal to Inet4Pktinfo struct
+	//
+	// Hint: Using Ipi.Ifindex as this used by Rx AND Tx timestamps
+	Ipi syscall.Inet4Pktinfo
 }
 
 const (
@@ -285,6 +323,8 @@ func SCIONgoconnect(_fd C.int) C.int {
 		return C.int(-1)
 	}
 
+	//TODO: ACHTUNG DAS CRASHT WENN CONNECTION DOWN!!!!
+
 	log.Printf("(SCIONgoconnect) Available paths to %v:\n", s.rAddr.IA)
 	for _, p := range s.ps {
 		log.Printf("(SCIONgoconnect)  \t%v\n", p)
@@ -295,6 +335,12 @@ func SCIONgoconnect(_fd C.int) C.int {
 
 	s.rAddr.Path = s.selectedPath.Path()
 	s.rAddr.NextHop = s.selectedPath.UnderlayNextHop()
+
+	//Stimmt das so??? Vielleicht liegt das an der neuen total verschossensn scionconfig
+	if s.rAddr.NextHop == nil {
+		s.rAddr.NextHop = s.rAddr.Copy().Host
+		s.rAddr.NextHop.Port = 30041
+	}
 
 	//TODO Art der TS's ist hier eigneltich nciht klar....
 	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, addr.TxKernelHwRxKernelHw)
@@ -494,26 +540,40 @@ func (s *FDSTATUS) rcvLogic() {
 			//msgTS.payload = payload
 			msgTS.sentTo = nil
 
-			if s.txKERNELts {
-				msgTS.tsType = tskernel //not needed
-				var ts3 C.struct_scm_timestamping
-				//kernel ts
-				ts3.ts[0].tv_sec = C.long(rcvMsgNTPTS.pkt.KernelTS.Sec)
-				ts3.ts[0].tv_nsec = C.long(rcvMsgNTPTS.pkt.KernelTS.Nsec)
-				msgTS.ts3 = ts3
+			//TODO Prüfe ob ich überall direkt structs zuweisen soll
+			//Zudem benötigt man ts3 jetzt eigentlich nciht mehr
+
+			var ts3 C.struct_scm_timestamping
+			//kernel ts
+			ts3.ts[0].tv_sec = C.long(rcvMsgNTPTS.pkt.KernelTS.Sec)
+			ts3.ts[0].tv_nsec = C.long(rcvMsgNTPTS.pkt.KernelTS.Nsec)
+			//hardware ts
+			ts3.ts[2].tv_sec = C.long(rcvMsgNTPTS.pkt.HwTS.Sec)
+			ts3.ts[2].tv_nsec = C.long(rcvMsgNTPTS.pkt.HwTS.Nsec)
+			msgTS.ts3 = ts3
+
+			msgTS.KernelTS = rcvMsgNTPTS.pkt.KernelTS
+			msgTS.HwTS = rcvMsgNTPTS.pkt.HwTS
+
+			msgTS.InterfaceID = rcvMsgNTPTS.pkt.InterfaceID
+			msgTS.PktLengthL2 = rcvMsgNTPTS.pkt.PktLengthL2
+			msgTS.Ipi = rcvMsgNTPTS.pkt.Ipi
+
+			if s.txKERNELts && rcvMsgNTPTS.pkt.KernelTS.Sec != 0 {
+				msgTS.tsType = tskernel //not needed: DOCH aber auf eine andere art
+
 				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Kernel)=%v", s.Fd, s.idRoutineRead, ts3)
 				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS", s.Fd, s.idRoutineRead)
 				s.sendQueueTS <- msgTS
 			}
-			if s.txHWts {
+			if s.txHWts && rcvMsgNTPTS.pkt.HwTS.Sec != 0 {
 				msgTS.tsType = tshardware //not needed
-				var ts3 C.struct_scm_timestamping
-				//hardware ts
-				ts3.ts[2].tv_sec = C.long(rcvMsgNTPTS.pkt.HwTS.Sec)
-				ts3.ts[2].tv_nsec = C.long(rcvMsgNTPTS.pkt.HwTS.Nsec)
-				msgTS.ts3 = ts3
+
 				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(HW)=%v", s.Fd, s.idRoutineRead, ts3)
 				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS", s.Fd, s.idRoutineRead)
+				if ts3.ts[2].tv_sec != 0 {
+					fmt.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> HURRAY!!!!! ts3(HW)=%v", s.Fd, s.idRoutineRead, ts3)
+				}
 				s.sendQueueTS <- msgTS
 			}
 
@@ -530,7 +590,12 @@ func (s *FDSTATUS) rcvLogic() {
 				continue //return //continue
 			}
 
-			//var ts3 C.struct_scm_timestamping
+			rcvMsgNTPTS.KernelTS = rcvMsgNTPTS.pkt.KernelTS
+			rcvMsgNTPTS.HwTS = rcvMsgNTPTS.pkt.HwTS
+
+			rcvMsgNTPTS.InterfaceID = rcvMsgNTPTS.pkt.InterfaceID
+			rcvMsgNTPTS.PktLengthL2 = rcvMsgNTPTS.pkt.PktLengthL2
+			rcvMsgNTPTS.Ipi = rcvMsgNTPTS.pkt.Ipi
 
 			if s.rxKERNELts {
 				rcvMsgNTPTS.tsType = tskernel
@@ -593,9 +658,9 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 	s.createTxTimestamp = int(s.Sinfo.createTxTimestamp) == 1
 	s.createRxTimestamp = int(s.Sinfo.createRxTimestamp) == 1
 	s.txKERNELts = s.createTxTimestamp
-	//s.txHWts = s.createTxTimestamp //change this logic
+	s.txHWts = s.createTxTimestamp //change this logic
 	s.rxKERNELts = s.createRxTimestamp
-	//s.rxHWts = s.createRxTimestamp //change this logic
+	s.rxHWts = s.createRxTimestamp //change this logic
 
 	fdstatus[fd] = s //store it back
 
@@ -1447,10 +1512,10 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			dstipIP := sendMsgTS.pkt.Destination.Host.IP().To4()
 			var dstIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(dstipIP))
 
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = s.Sinfo.if_index
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = srcIP
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP //TODO: activate this line and remove the next one
-			//(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = C.htonl(173026688) //10.80.45.128
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = C.int(sendMsgTS.Ipi.Ifindex) //s.Sinfo.if_index
+			//TODO use NEW stuff directly
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = srcIP //NEU: sendMsgTS.Ipi.Spec_dst
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP     //NEU: sendMsgTS.Ipi.Addr
 
 			/*
 				memcpy(&ipi, CMSG_DATA(cmsg), sizeof(ipi));
@@ -1567,8 +1632,8 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			cmsg.cmsg_level = C.SOL_SOCKET
 			cmsg.cmsg_type = C.SCM_TIMESTAMPING_PKTINFO
 			cmsgDataPtr = cmsgData(cmsg)
-			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).if_index = C.uint(s.Sinfo.if_index)
-			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).pkt_length = C.uint(pktLengtLayer2)
+			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).if_index = C.uint(rcvMsgNTPTS.InterfaceID)   //C.uint(s.Sinfo.if_index)
+			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).pkt_length = C.uint(rcvMsgNTPTS.PktLengthL2) //C.uint(pktLengtLayer2)
 
 			// Add SO_TIMESTAMPING
 			cmsg = cmsgNextHdr(msghdr, cmsg)
@@ -1596,15 +1661,11 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 
 			ipIP = rcvMsgNTPTS.pkt.Destination.Host.IP().To4()
 			var dstIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(ipIP))
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = s.Sinfo.if_index
-			//var aaa C.struct_in_addr
-			//var bbb C.struct_in_addr
-			//remove this c-call.... PARSE correct source address
-			//aaa.s_addr = dstIP //C.htonl(173026643) //10.80.45.83??
-			//bbb.s_addr = dstIP //C.htonl(173026643) //10.80.45.83??
-			//should this always be the same for ipi_spec_dst and ipi_addr
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = dstIP
-			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_ifindex = C.int(rcvMsgNTPTS.Ipi.Ifindex) //s.Sinfo.if_index
+			//should this always be the same for ipi_spec_dst and ipi_addr: Probably!
+			//TODO use NEW stuff directly
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_spec_dst.s_addr = dstIP //NEU: rcvMsgNTPTS.Ipi.Spec_dst
+			(*C.struct_in_pktinfo)(unsafe.Pointer(cmsgDataPtr)).ipi_addr.s_addr = dstIP     //NEU: rcvMsgNTPTS.Ipi.Addr
 
 			msghdr.msg_controllen = msgControllen
 
