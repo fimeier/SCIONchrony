@@ -2,7 +2,7 @@
 
 
 
-#define SENDNTPPERIP 1
+#define SENDNTPPERIP 1 //remove this
 
 #define MSGBUFFERSIZE 100
 #define MSGBUFFERSIZESERVER 1000

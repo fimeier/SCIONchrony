@@ -96,6 +96,13 @@ extern int SetSciondAddr(char* _sciondAddr);
 // SetLocalAddr registers Chrony's SCION address (ex: 1-ff00:0:112,10.80.45.83)
 extern int SetLocalAddr(char* _localAddr);
 
+// IsScionNode arg tbd
+//
+// returns 1 == scion node
+// return 0 == scion node, but old entry <= maybe not used (compare clientMappingDeleteTimeout)
+// return -1 == not a scion node
+extern int IsScionNode(char* _remoteAddrString);
+
 //SCIONgoconnect creates the needed objects to call/recv data from a scion connections.
 //Attention: This doesn't start a receive method!
 //The send ntp packets as a client: call socket(), connect(), setsockopt(), send*(), *will also start receive method

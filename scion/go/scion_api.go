@@ -265,7 +265,49 @@ func SetLocalAddr(_localAddr *C.char) C.int {
 
 var fdstatus = make(map[int]FDSTATUS)
 
-var clientMapping = make(map[string](*snet.UDPAddr))
+// ClientMapping
+// Store client addresses incomming over scion
+//
+// Assumptions: A client or node will contact us first. Then we keep track of the mapping. Otherwise the mapping exists somewhere in Chrony and we do not need it
+type ClientMapping struct {
+	Addr      *snet.UDPAddr
+	TimeAdded time.Time //just needed to allow a client to reconnect over normal "UDP connection" without restarting Chrony (And to get some memory back)
+}
+
+// ClientMappingTimeout specifies a timeout
+const ClientMappingTimeout = 60 * time.Second //TODO: I guess this can also be smaller. But there is no point in doing it while debuggin
+
+const clientMappingDeleteTimeout = ClientMappingTimeout //could be something longer
+
+// IsScionNode arg tbd
+//
+// returns 1 == scion node
+// return 0 == scion node, but old entry <= maybe not used (compare clientMappingDeleteTimeout)
+// return -1 == not a scion node
+//export IsScionNode
+func IsScionNode(_remoteAddrString *C.char) (status C.int) {
+
+	remoteAddrString := C.GoString(_remoteAddrString)
+
+	cMap, exists := clientMapping[remoteAddrString]
+	if exists {
+		// scion node, but old entry
+		if cMap.TimeAdded.Add(ClientMappingTimeout).Before(time.Now()) {
+			// remove old entries
+			if cMap.TimeAdded.Add(clientMappingDeleteTimeout).Before(time.Now()) {
+				delete(clientMapping, remoteAddrString)
+			}
+			return 0
+		}
+		//scion node
+		return 1
+	}
+	// not a scion node
+	return -1
+}
+
+//var clientMapping = make(map[string](*snet.UDPAddr))
+var clientMapping = make(map[string]ClientMapping)
 
 var fdList = make(map[int]int)
 var maxFD = 1024
@@ -524,9 +566,9 @@ func (s *FDSTATUS) rcvLogic() {
 			nErrQueueMsgsReceived++
 			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received ERR_QUEUE_MSG", s.Fd, s.idRoutineRead)
 			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> KS-TS=%v HW-TS=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.pkt.KernelTS, rcvMsgNTPTS.pkt.HwTS)
-			if rcvMsgNTPTS.pkt.KernelTS.Sec == 0 {
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> missing kernel ts", s.Fd, s.idRoutineRead)
-			}
+			//if rcvMsgNTPTS.pkt.KernelTS.Sec == 0 {
+			//	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> missing kernel ts", s.Fd, s.idRoutineRead)
+			//}
 
 			var msgTS sendMsgTS
 
@@ -879,8 +921,8 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 		s, exists := fdstatus[fd] //we can ignore them: Assumption: We are still in chronyd's main thread => while we are in SCIONselect, there cannot be created any new states. If this is not true anymore, check it at the beginning of the loop. Relevant for very long running timeouts.
 		if exists {
 			if s.isNTPServer {
-				//checkBothWorlds = true
-				log.Printf("(SCIONselect) ACHTUNG: checkBothWorlds kann für NTP Server nicht aktiviert werden, da recv (noch) nicht vorbereitet")
+				checkBothWorlds = true
+				//log.Printf("(SCIONselect) ACHTUNG: checkBothWorlds kann für NTP Server nicht aktiviert werden, da recv (noch) nicht vorbereitet")
 			}
 		}
 		var rIsSet, eIsSet, wIsSet bool
@@ -1173,12 +1215,14 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 		//= make(map[string](*snet.UDPAddr))
 		//remoteAddrString := "fake me"
 		var exists bool
-		remoteAddr, exists = clientMapping[remoteAddrString]
+		cMap, exists := clientMapping[remoteAddrString]
+		//remoteAddr, exists = clientMapping[remoteAddrString]
 		if !exists {
 			log.Printf("(SCIONgosendmsg) Non-existing entry clientMapping[%v]", remoteAddrString)
 			s.sent <- int(-1)
 			return
 		}
+		remoteAddr = cMap.Addr
 	} else {
 		log.Fatal("(sendmsgOverScion) Unconnected case needs to be implemended....")
 		s.sent <- int(-1)
@@ -1583,7 +1627,8 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 				log.Printf("(SCIONgorecvmmsg) ----> remoteAddr.NextHop = %v", remoteAddr.NextHop)
 				log.Printf("(SCIONgorecvmmsg) ----> remoteAddr.Path = %v", remoteAddr.Path)
 
-				clientMapping[remoteAddr.Host.String()] = remoteAddr
+				clientMap := ClientMapping{Addr: remoteAddr, TimeAdded: time.Now()}
+				clientMapping[remoteAddr.Host.String()] = clientMap
 
 			}
 

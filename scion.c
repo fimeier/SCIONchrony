@@ -14,7 +14,7 @@ static fdInfo *fdInfos[1024];
 //workaround... fix this ugly construct
 #define NUMMAPPINGS 10
 static addressMapping *ntpServers[NUMMAPPINGS];
-static addressMapping *ntpClients[NUMMAPPINGS];
+//static addressMapping *ntpClients[NUMMAPPINGS];
 
 static int ntpPort = NTP_PORT;
 static int commandPort = DEFAULT_CANDM_PORT;
@@ -159,6 +159,7 @@ void SCION_Initialise(void)
     =>Fraglich inwiefern/welche Infos hier verfügbar sein sollen
    */
 
+    /*
     addressMapping *client = calloc(1, sizeof(addressMapping));
     strcpy(client->addressIP, "10.80.45.78");
     strcpy(client->addressSCION, "1-ff00:0:110,10.80.45.83:33333");
@@ -168,6 +169,7 @@ void SCION_Initialise(void)
     strcpy(client->addressIP, "10.80.45.1");
     strcpy(client->addressSCION, "1-ff00:0:110,10.80.45.83:44444");
     ntpClients[2] = client;
+    */
 }
 
 int ts_flags_p52 = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE | SOF_TIMESTAMPING_RAW_HARDWARE | SOF_TIMESTAMPING_RX_HARDWARE | SOF_TIMESTAMPING_OPT_PKTINFO | SOF_TIMESTAMPING_OPT_TX_SWHW | SOF_TIMESTAMPING_OPT_CMSG;
@@ -254,7 +256,7 @@ int SCION_socket(int __domain, int __type, int __protocol)
     DEBUG_LOG("Creating socket with domain=%d type=%d protocol=%d", __domain, __type, __protocol);
     int fd = socket(__domain, __type, __protocol);
 
-/*
+    /*
 NTS
 Creating socket with domain=2 (ok) type=526337 protocol=0
 */
@@ -551,7 +553,7 @@ int SCION_connect(int __fd, __CONST_SOCKADDR_ARG __addr, socklen_t __len, IPSock
             //If we don't have a SCION address this implies we are connecting to a common NTP-Server
             else
             {
-                DEBUG_LOG("\t|----->  We don't have a scion address. Will delete datastructures in go-Wold an call standard connect()");
+                DEBUG_LOG("\t|----->  We don't have a scion address. Will delete datastructures in go-Wold and call standard connect()");
                 fdi->socketType = fdi->connectionType = SOMETHING_ELSE; //HAHA: connectionType kann garnicht gesetzt sein
                 SCIONgoclose(__fd);
                 return connect(__fd, __addr, __len);
@@ -610,7 +612,6 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
             {
             case AF_INET:
             {
-                /* Chronyd talks as a Server to a Client */
 
                 //TODO fix this ugly construct: depends on how the GO-Part registers the clients
                 char remoteAddress[MAXADDRESSLENGTH] = ""; //initialization is needed!!!
@@ -621,29 +622,40 @@ ssize_t SCION_sendmsg(int __fd, const struct msghdr *__message, int __flags)
                 sprintf(portAsStr, "%u", ntohs(((struct sockaddr_in *)__message->msg_name)->sin_port));
                 strcat(remoteAddress, portAsStr);
 
-                DEBUG_LOG("\t|----> sending to %s", remoteAddress);
+                int clientType = IsScionNode(remoteAddress);
 
-                //char *clientAsScionAddress = getClientSCIONAddress(remoteAddress);
-                //if (clientAsScionAddress != NULL) //strcmp(remoteAddress, ntpServer1) == 0)
-                if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
+                /* Scion-Chronyd talks as a Server to a Scion Client */
+                if (0 < clientType)
                 {
-                    DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server");
-                    if (uglyHack == (SOF_TIMESTAMPING_TX_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE))
+
+                    DEBUG_LOG("\t|----> sending to %s", remoteAddress);
+
+                    if (fdInfos[__fd] != NULL && fdInfos[__fd]->connectionType == IS_NTP_SERVER)
                     {
-                        DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server. For this Packet we request TX Timestamps!!!");
+                        DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server");
+                        if (uglyHack == (SOF_TIMESTAMPING_TX_SOFTWARE | SOF_TIMESTAMPING_TX_HARDWARE))
+                        {
+                            DEBUG_LOG("\t|----> sending Message over Scion. We are the Chrony-Scion NTP Server. For this Packet we request TX Timestamps!!!");
+                        }
+                        status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress, uglyHack);
+                        return status;
                     }
-                    status = SCIONgosendmsg(__fd, __message, __flags, remoteAddress, uglyHack);
-                    /*DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
+                }
 
-                //TODO remove sendmsg()
-                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-                DEBUG_LOG("\t|----> TODO remove sendmsg()!!!!");
-                status = sendmsg(__fd, __message, __flags);
-                */
-
+                /* Scion-Chronyd talks as a Server to a UDP Client */
+                if (clientType < 0)
+                {
+                    DEBUG_LOG("\t|----> not a connection to a scion target. Not using SCION, even tough we are the SCION SERVER");
+                    status = sendmsg(__fd, __message, __flags);
+                    DEBUG_LOG("\t|----> Sent message on socket fd=%d with status=%d(<-#bytes sent)", __fd, status);
                     return status;
+                }
+
+                if (clientType == 0)
+                {
+                    DEBUG_LOG("\t|----> a connection to a scion target, but outdated. We are the SCION SERVER");
+                    DEBUG_LOG("\t|----> Behaviour on socket fd=%d sending to %s needs to be defined", __fd, remoteAddress);
+                    return -1;
                 }
                 break;
             }
@@ -1022,6 +1034,15 @@ Was Chrony beim empfang prüft
             n = SCIONgorecvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
             DEBUG_LOG("|----->received %d messages over SCION connection (we are the NTP Server)", n);
             DEBUG_LOG("|----->TODO add ntpClients[NUMMAPPINGS] logic for SCION_sendmsg()");
+
+            //TODO just as a fast test... we should also check it if it isn't 0 (no starvation for udp clients)
+            //But in the end, we should use the infos from the last select call to decide what we want to call...
+            if (n == 0)
+            {
+                DEBUG_LOG("Testing Both World Feature|----->received 0 messages over SCION connection... now trying UDP-channel...");
+                n = recvmmsg(__fd, __vmessages, __vlen, __flags, __tmo);
+                DEBUG_LOG("|----->received %d messages over NON-scion connection", n);
+            }
 
             //TODO remove recvmmsg()
             /*
