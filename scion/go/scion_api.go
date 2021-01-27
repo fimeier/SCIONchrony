@@ -35,29 +35,17 @@ import (
 	"github.com/scionproto/scion/go/lib/snet"
 	"github.com/scionproto/scion/go/lib/sock/reliable"
 	"github.com/scionproto/scion/go/lib/sock/reliable/reconnect"
+	"github.com/scionproto/scion/go/lib/topology/underlay"
 )
 
 /* TODO:
--DO something useful with the Context
--CGO: Dataexchange performance (Kernel Threads?), memory model for cgo-ROutines accessing c-Pointers (sync?)
----->eignetlich sollte es "keinen" overhead geben, da lediglich Daten ausgetauscht werden
----->falls doch, daten auf andere art austauschen?
 -FDSTATUS in Map..... s, exists := fdstatus[fd] s.ändern.... dann zurückspeichern.... buggy
 -------->array mit fd als index auf struct ptr
--send() behaviour as it is nonblocking... start go routine? return value?
-------> allenfalls rcv erst wärend erstem send starten (wie sollte logik sein...)
----> work with fdstatus[fd] or its copy....
----> non blocking send: Buffer wie lange muss dieser bestehen bleiben (mal rein für C)
------------> Chrony überschreibt ihn im allgemeinen ja erst wenn eine nachricht empfangen wird für diesesn Socket
---->SCIONselect: busy-wait loop....... überlege ob chrony timeouts relevant sind für Logik...
+--------> work with fdstatus[fd] or its copy....
+
 */
 
-/*
-go build -buildmode=c-shared -o scion_api.so *.go
-*/
-
-const pktLengtLayer2 = 90
-
+// Increasing Counter for Logging purposes
 var idRoutineRead int
 
 //datastructure for SCIONselect
@@ -78,42 +66,50 @@ type fdset struct {
 
 //FDSTATUS contains EVERYTHING
 type FDSTATUS struct {
-	/*TODO: Decide how to use it/change it..... */
-	idRoutineRead int
-	idRoutineSend int
-	Fd            int         //fd corresponds to the socket number as used by chrony (could also be a pseudo fd)
-	Sinfo         C.fdInfoPtr //Pointer to fdInfo c-Struct
-	//nonblocking        bool
-	//dgram              bool
-	sent               chan int //test entry: number of bytes sent
-	remoteAddress      string   //IP address
-	remoteAddressSCION string
+	idRoutineRead int //useful for debugging
+	//idRoutineSend      int         //inactive
+	Fd    int         //fd corresponds to the socket number as used by chrony (could also be a pseudo fd)
+	Sinfo C.fdInfoPtr //Pointer to fdInfo c-Struct
+
+	sent               chan int //emulates sendmsg() interface by returning blocking or non blocking the number of bytes sent
+	remoteAddress      string   //IP address as string
+	remoteAddressSCION string   //Scion address as string
 	rAddr              *snet.UDPAddr
-	sdc                daemon.Connector
-	pds                *snet.DefaultPacketDispatcherService
-	ps                 []snet.Path
-	selectedPath       snet.Path
-	ctx                context.Context
-	cancel             context.CancelFunc //defer cancel()
-	conn               snet.PacketConn
-	localPortSCION     uint16        //fix this: bzw vgl mit localAddr.Host.Port = 0 //ignore user defined srcport
-	connected          bool          //if set => SCIONgoconnect() finished without errors
-	doneRcv            chan struct{} //close this to stop everything related to receiving
-	rcvQueueNTPTS      chan rcvMsgNTPTS
-	sendQueueTS        chan sendMsgTS
-	rcvLogicStarted    bool
-	createTxTimestamp  bool
-	txKERNELts         bool //use this
-	txHWts             bool //use this
-	createRxTimestamp  bool //TODO Adapt logig for recv (started after connect, but before setsockopts..)
-	rxKERNELts         bool //use this
-	rxHWts             bool //use this
-	isNTPServer        bool
-	isbound            bool
+
+	sdc daemon.Connector                     //same as the global one
+	pds *snet.DefaultPacketDispatcherService //same as the global one
+
+	ps             []snet.Path //set by SCIONgoconnect()
+	selectedPath   snet.Path   //set by SCIONgoconnect()
+	ctx            context.Context
+	cancel         context.CancelFunc //SCIONgoclose will call cancel()
+	conn           snet.PacketConn
+	localPortSCION uint16 //the port returned by Register()
+
+	connected bool //if set => SCIONgoconnect() finished without errors
+
+	doneRcv       chan struct{} //close this to stop everything related to receiving
+	rcvQueueNTPTS chan rcvMsgNTPTS
+	sendQueueTS   chan sendMsgTS
+
+	rcvLogicStarted bool
+
+	txKERNELts bool //use this
+	txHWts     bool //use this
+
+	rxKERNELts bool //use this
+	rxHWts     bool //use this
+
+	scionTimestampingMode addr.HostSVC // something like addr.TxKernelHwRxKernelHw. Stored here so that it needs to be "calculated" only once
+
+	isNTPServer    bool //identifies the scion ntp server (not the same as isbound!) <= there should only be one
+	isbound        bool //identifies a socket SCIONgobind() has been called
+	registerCalled bool //identifies a socket Register() has been called
+	bindAddr       *snet.UDPAddr
 }
 
 type rcvMsgNTPTS struct {
-	tsType int //TS type.... not needed?
+	//tsType int //TS type.... not needed?
 	//Todo Change to pointer?
 	pkt snet.Packet //call like this should never fail (is checked befor added): rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
 	ov  net.UDPAddr
@@ -143,11 +139,11 @@ type rcvMsgNTPTS struct {
 Further: There are two messages needed for a correct message count in select (C-Library createse two separate messages: TS creation for Kernel/HW takes different amount of time)
 */
 type sendMsgTS struct {
-	tsType int //TS type.... not needed?
-	pkt    *snet.Packet
+	//tsType int //TS type.... not needed?
+	pkt *snet.Packet
 	//payload []byte
-	ts3    C.struct_scm_timestamping
-	sentTo *snet.UDPAddr //wird das jemals ausgelesen?
+	ts3 C.struct_scm_timestamping
+	//sentTo *snet.UDPAddr //wird das jemals ausgelesen?
 
 	//use this once finished... Ide is struggling on chrony with nested structs in cgo projects
 	//--->common.PacketTSExtensionClient<-----
@@ -169,6 +165,7 @@ type sendMsgTS struct {
 	Ipi syscall.Inet4Pktinfo
 }
 
+/*
 const (
 	tskernelhardware = iota + 1
 	tskernel
@@ -177,18 +174,15 @@ const (
 	rxkernel
 	rxhardware
 )
+*/
 
+/*
 type NTP_int64 struct {
 	hi uint32
 	lo uint32
 }
 
 type NTP_Packet struct {
-	/* C to GO datatypes
-	uint8_t == unsigned char => uint8 ?
-	int8_t == signed char =>  int8?
-	NTP_int64 == unsigned int => uint32
-	*/
 	lvm             uint8 //mefi84 LeapIndicator(2)||VersionNumber(3)||Mode(3) == 8 Bits
 	stratum         uint8
 	poll            int8
@@ -201,9 +195,10 @@ type NTP_Packet struct {
 	receive_ts      NTP_int64
 	transmit_ts     NTP_int64
 
-	/* header length == 48 => extensions are not used*/
+	//header length == 48 => extensions are not used
 	//extensions [C.NTP_MAX_EXTENSIONS_LENGTH]uint8
 }
+*/
 
 func cancelled(done chan struct{}) bool {
 	select {
@@ -221,10 +216,7 @@ func init() {
 
 	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime | log.LUTC)
 
-	//bug in C.GODEBUG???... can't activate it anymore... always existing and zero..
-	//Use go clean --cache
 	if C.GODEBUG == 0 {
-		//if C.GODEBUGNEW == 0 {
 		log.Printf("(Init) log.* Output has been disabled as #define GODEBUGNEW 0 is set")
 		log.SetOutput(ioutil.Discard)
 	}
@@ -263,12 +255,18 @@ func SetLocalAddr(_localAddr *C.char) C.int {
 	return C.int(1)
 }
 
+//fdstatus provides informations for a (virtual) fd == key
+//
+//Hint: Contains the data itself and not a pointer
+//Reason: An fd can be created, used, delete AND recreated multiple times
+//=> there can be some goroutines still running on the "old" entry, while we delete it and recreate it
+//=> this should prevent raceconditions (there are probably better designs...)
 var fdstatus = make(map[int]FDSTATUS)
 
-// ClientMapping
-// Store client addresses incomming over scion
+// ClientMapping stores client addresses connecting over scion
 //
-// Assumptions: A client or node will contact us first. Then we keep track of the mapping. Otherwise the mapping exists somewhere in Chrony and we do not need it
+// Assumptions: A client or node will contact us first. Then we keep track of the mapping.
+// Otherwise the mapping exists somewhere in Chrony and we do not need to manage it
 type ClientMapping struct {
 	Addr      *snet.UDPAddr
 	TimeAdded time.Time //just needed to allow a client to reconnect over normal "UDP connection" without restarting Chrony (And to get some memory back)
@@ -313,10 +311,11 @@ var fdList = make(map[int]int)
 var maxFD = 1024
 
 //SCIONgoconnect creates the needed objects to call/recv data from a scion connections.
-//Attention: This doesn't start a receive method!
-//The send ntp packets as a client: call socket(), connect(), setsockopt(), send*(), *will also start receive method
+//Attention: This doesn't start a receive method! And probably no Register() call
+//To send ntp packets as a client, Chrony calls: socket(), connect(), setsockopt(), send*(), *will also start receive method
 //export SCIONgoconnect
-func SCIONgoconnect(_fd C.int) C.int {
+func SCIONgoconnect(_fd C.int, callRegister C.int) C.int {
+
 	fd := int(_fd)
 	s, exists := fdstatus[fd]
 	if !exists {
@@ -337,27 +336,10 @@ func SCIONgoconnect(_fd C.int) C.int {
 		return C.int(-1)
 	}
 
-	//s.ctx = context.Background()
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	s.sdc = sdc
-	/*
-		s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
-		if err != nil {
-			log.Printf("(SCIONgoconnect) Failed to create SCION connector:", err)
-			return C.int(-1)
-		}
-	*/
-
 	s.pds = pds
-	/*
-		s.pds = &snet.DefaultPacketDispatcherService{
-			Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
-			SCMPHandler: snet.DefaultSCMPHandler{
-				RevocationHandler: daemon.RevHandler{Connector: s.sdc},
-			},
-		}
-	*/
 
 	s.ps, err = s.sdc.Paths(s.ctx, s.rAddr.IA, localAddr.IA, daemon.PathReqFlags{Refresh: true})
 	if err != nil {
@@ -365,8 +347,7 @@ func SCIONgoconnect(_fd C.int) C.int {
 		return C.int(-1)
 	}
 
-	//TODO: ACHTUNG DAS CRASHT WENN CONNECTION DOWN!!!!
-
+	//TODO: ACHTUNG DAS CRASHT WENN CONNECTION DOWN!!!! Should be okay now? Or was this err check always there?
 	log.Printf("(SCIONgoconnect) Available paths to %v:\n", s.rAddr.IA)
 	for _, p := range s.ps {
 		log.Printf("(SCIONgoconnect)  \t%v\n", p)
@@ -378,17 +359,23 @@ func SCIONgoconnect(_fd C.int) C.int {
 	s.rAddr.Path = s.selectedPath.Path()
 	s.rAddr.NextHop = s.selectedPath.UnderlayNextHop()
 
-	//Stimmt das so??? Vielleicht liegt das an der neuen total verschossensn scionconfig
+	//THis should be the default behaviour after a call to UnerlayNextHop()
 	if s.rAddr.NextHop == nil {
 		s.rAddr.NextHop = s.rAddr.Copy().Host
-		s.rAddr.NextHop.Port = 30041
+		s.rAddr.NextHop.Port = underlay.EndhostPort
 	}
 
+	s.registerCalled = false
+
+	//DIesen Teil hier sollte ich ausgliedern.... damit  addr.TxKernelHwRxKernelHw mit s.scionTimestampingMode ersetzt werden kann
 	//TODO Art der TS's ist hier eigneltich nciht klar....
-	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, addr.TxKernelHwRxKernelHw)
-	if err != nil {
-		log.Printf("(SCIONgoconnect)  Failed to register client socket: %v", err)
-		return C.int(-1)
+	if int(callRegister) == 1 {
+		s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, s.scionTimestampingMode)
+		if err != nil {
+			log.Printf("(SCIONgoconnect)  Failed to register client socket: %v", err)
+			return C.int(-1)
+		}
+		s.registerCalled = true
 	}
 
 	s.connected = true
@@ -396,10 +383,6 @@ func SCIONgoconnect(_fd C.int) C.int {
 	s.doneRcv = make(chan struct{})
 	s.rcvQueueNTPTS = make(chan rcvMsgNTPTS, int(C.MSGBUFFERSIZE))
 	s.sendQueueTS = make(chan sendMsgTS, int(C.MSGBUFFERSIZE))
-
-	//ASSUMPTION: CONNECTED_TO_NTP_SERVER => RX/TX will be activated (workarround for rcvlogic)
-	//s.createRxTimestamp = true
-	//s.createTxTimestamp = true
 
 	fdstatus[fd] = s //store it back
 	log.Printf("(SCIONgoconnect) Created Connection. rcvLogic() not started")
@@ -411,12 +394,12 @@ func SCIONgoconnect(_fd C.int) C.int {
 	return C.int(0) //TODO -1 for errors
 }
 
-var ScionStarted bool
+var scionStarted bool
 var sdc daemon.Connector
 var pds *snet.DefaultPacketDispatcherService
 
 func initScion() {
-	if ScionStarted {
+	if scionStarted {
 		return
 	}
 
@@ -436,15 +419,47 @@ func initScion() {
 		},
 	}
 
-	ScionStarted = true
+	scionStarted = true
 }
 
-//SCIONgobind Used to start recv Logic: now all socket options should be set
+// SCIONstartntp Used to call Scion's Register() and to start recv Logic: now all socket options should be set.
+//
+// Compare the listing at the end.
 //export SCIONstartntp
 func SCIONstartntp() C.int {
 	initScion()
+	var err error
 	for _, s := range fdstatus {
-		if s.isbound {
+
+		if s.isbound { //we could have more then one port: NTP-Server, Client-Interface, ...
+
+			if s.registerCalled == false {
+				//As THE Server we do activate Tx-TS's. It is also possible to do this while sending,
+				//but for this we need to transmit an additional bit (similar to how we communicate the oob data)
+				//Compare sendmsgOverScion and the corresponding part in Scionproto (search for 4242666 in this document)
+				//
+				if s.isNTPServer {
+					s.txKERNELts = true
+					s.txHWts = s.rxHWts
+					switch s.scionTimestampingMode {
+					case addr.RxKernel:
+						s.scionTimestampingMode = addr.TxKernelRxKernel
+					case addr.RxKernelHw:
+						s.scionTimestampingMode = addr.TxKernelHwRxKernelHw
+					}
+
+				}
+				s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, s.bindAddr.IA, s.bindAddr.Host, s.scionTimestampingMode)
+				if err != nil {
+					log.Printf("(SCIONstartntp)  Failed to register client socket:  %v", err)
+					return C.int(-1)
+				}
+				s.registerCalled = true
+				fdstatus[s.Fd] = s
+				log.Printf("(SCIONgobind)--> bindAddr.IA=%v, bindAddr.Host=%v s.scionTimestampingMode=%v s.txHWts=%v s.txKERNELts=%v s.rxHWts=%v s.rxKERNELts=%v", s.bindAddr.IA, s.bindAddr.Host, s.scionTimestampingMode, s.txHWts, s.txKERNELts, s.rxHWts, s.rxKERNELts)
+
+			}
+
 			if !s.rcvLogicStarted {
 				s.rcvLogicStarted = true
 				idRoutineRead++
@@ -458,11 +473,78 @@ func SCIONstartntp() C.int {
 		}
 	}
 	return C.int(0)
+
+	/* Compare this to understand how Scion is calling the different functions to setup up the "NTP-server-socket"
+			=> Observe the last setsocketopt()-call: finally we know the TS-Settings
+
+	   2021-01-27T10:10:05Z scion.c:218:(SCION_socket) Creating socket with domain=2 type=526338 protocol=0
+	   2021-01-27T10:10:05Z scion.c:243:(SCION_socket) ----> domain = AF_INET
+	   2021-01-27T10:10:05Z scion.c:260:(SCION_socket) ----> type = SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK
+	   2021-01-27T10:10:05Z scion.c:278:(SCION_socket) ----> fd = 8 (received from system, using this for SCION)
+	   2021/01/27 10:10:05 scion_api.go:734: (SCIONgosocket) Creating "socket" fd=8
+	   2021/01/27 10:10:05 scion_api.go:760: (SCIONgosocket) ----> domain=2 type=526338 protocol=0
+	   2021/01/27 10:10:05 scion_api.go:762: (SCIONgosocket) ----> type == C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK
+	   2021/01/27 10:10:05 scion_api.go:765: (SCIONgosocket) ----> type => C.SOCK_DGRAM
+	   2021/01/27 10:10:05 scion_api.go:768: (SCIONgosocket) ----> type => C.SOCK_NONBLOCK
+	   2021-01-27T10:10:05Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=1 optname=6
+	   2021-01-27T10:10:05Z scion.c:343:(SCION_setsockopt)     |----> level = SOL_SOCKET
+	   2021-01-27T10:10:05Z scion.c:360:(SCION_setsockopt)     |----> optname = SO_BROADCAST
+	   2021-01-27T10:10:05Z scion.c:388:(SCION_setsockopt)     |----> optval = 1 => activate option
+	   2021-01-27T10:10:05Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021-01-27T10:10:05Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=0 optname=8
+	   2021-01-27T10:10:05Z scion.c:321:(SCION_setsockopt)     |----> level = IPPROTO_IP
+	   2021-01-27T10:10:05Z scion.c:326:(SCION_setsockopt)     |----> optname = IP_PKTINFO
+	   2021-01-27T10:10:05Z scion.c:388:(SCION_setsockopt)     |----> optval = 1 => activate option
+	   2021-01-27T10:10:05Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021-01-27T10:10:05Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=1 optname=2
+	   2021-01-27T10:10:05Z scion.c:343:(SCION_setsockopt)     |----> level = SOL_SOCKET
+	   2021-01-27T10:10:05Z scion.c:348:(SCION_setsockopt)     |----> optname = SO_REUSEADDR
+	   2021-01-27T10:10:05Z scion.c:388:(SCION_setsockopt)     |----> optval = 1 => activate option
+	   2021-01-27T10:10:05Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021-01-27T10:10:05Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=1 optname=15
+	   2021-01-27T10:10:05Z scion.c:343:(SCION_setsockopt)     |----> level = SOL_SOCKET
+	   2021-01-27T10:10:05Z scion.c:352:(SCION_setsockopt)     |----> optname = SO_REUSEPORT
+	   2021-01-27T10:10:05Z scion.c:388:(SCION_setsockopt)     |----> optval = 1 => activate option
+	   2021-01-27T10:10:05Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021-01-27T10:10:05Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=0 optname=15
+	   2021-01-27T10:10:05Z scion.c:321:(SCION_setsockopt)     |----> level = IPPROTO_IP
+	   2021-01-27T10:10:05Z scion.c:330:(SCION_setsockopt)     |----> optname = IP_FREEBIND
+	   2021-01-27T10:10:05Z scion.c:388:(SCION_setsockopt)     |----> optval = 1 => activate option
+	   2021-01-27T10:10:05Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021-01-27T10:10:05Z scion.c:486:(SCION_bind)   Binding fd=8
+	   2021-01-27T10:10:05Z scion.c:496:(SCION_bind)   |----> 0.0.0.0:123
+	   2021-01-27T10:10:34Z scion.c:500:(SCION_bind)   |----> calling SCIONgobind() as this is is Chrony's NTP-Server Socket
+	   2021/01/27 10:11:05 scion_api.go:512: (SCIONgobind)--> bindAddr.IA=1-ff00:0:112, bindAddr.Host=10.80.45.83:123
+	   2021/01/27 10:11:05 scion_api.go:521: (SCIONgobind)--> Registered Port 123 for fd=8. rcvLogic() not started!
+	   2021-01-27T10:11:08Z scion.c:503:(SCION_bind)   |----> SCIONgobind() return-state: 0
+	   2021-01-27T10:13:09Z scion.c:506:(SCION_bind)   |----> SCIONgobind() Also bound normal port. Combined return state: 0
+	   2021-01-27T10:14:10Z socket.c:495:(open_ip_socket) Opened UDPv4 socket fd=8 local=0.0.0.0:123
+	   2021-01-27T10:14:19Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=1 optname=45
+	   2021-01-27T10:14:19Z scion.c:343:(SCION_setsockopt)     |----> level = SOL_SOCKET
+	   2021-01-27T10:14:19Z scion.c:364:(SCION_setsockopt)     |----> optname = SO_SELECT_ERR_QUEUE
+	   2021-01-27T10:14:19Z scion.c:388:(SCION_setsockopt)     |----> optval = 1 => activate option
+	   2021-01-27T10:14:19Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021-01-27T10:14:19Z scion.c:303:(SCION_setsockopt)     Setting options fd=8 level=1 optname=37
+	   2021-01-27T10:14:19Z scion.c:343:(SCION_setsockopt)     |----> level = SOL_SOCKET
+	   2021-01-27T10:14:19Z scion.c:356:(SCION_setsockopt)     |----> optname = SO_TIMESTAMPING
+	   2021-01-27T10:14:19Z scion.c:388:(SCION_setsockopt)     |----> optval = 25692 => activate option
+	   2021-01-27T10:14:19Z scion.c:399:(SCION_setsockopt)     |---->  This is the option to activate RX-Timestamps (HW/Kernel)
+	   2021-01-27T10:14:19Z scion.c:450:(SCION_setsockopt)     |----> Info: We always set the socket options in the c-world
+	   2021/01/27 10:14:19 scion_api.go:717: (SCIONgosetsockopt) |--> Called for socket 8. Checking settings...
+	   2021/01/27 10:14:19 scion_api.go:718: (SCIONgosetsockopt) |--> createTxTimestamp=false
+	   2021/01/27 10:14:19 scion_api.go:719: (SCIONgosetsockopt) |--> createRxTimestamp=true
+	   2021/01/27 10:14:19 scion_api.go:720: (SCIONgosetsockopt) |--> enableHwTimestamp=true
+	   2021/01/27 10:14:19 scion_api.go:721: (SCIONgosetsockopt) |--> scionTimestampingMode=UNKNOWN M (0xaaa1)
+	*/
 }
 
-//SCIONgobind tbd....
+//SCIONgobind emulates a bind() call.
+//
+// callRegister "bool": compare comment in SCIONstartntp.
+// The assumption is, that callRegister will always be 0. At least as long as we do not open a scion-connection for the client interface.
+// Once we do it, we will be happy to directly start everythin at this point here (rcvlogic, Register()...)
 //export SCIONgobind
-func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
+func SCIONgobind(_fd C.int, _port C.uint16_t, callRegister C.int) C.int {
 	fd := int(_fd)
 	s, exists := fdstatus[fd]
 	if !exists {
@@ -483,40 +565,26 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 
 	s.sdc = sdc
-	/*
-		s.sdc, err = daemon.NewService(sciondAddr).Connect(s.ctx)
-		if err != nil {
-			log.Printf("(SCIONgobind) Failed to create SCION connector:", err)
-			return C.int(-1)
-		}
-	*/
-
 	s.pds = pds
-	/*
-		s.pds = &snet.DefaultPacketDispatcherService{
-			Dispatcher: reconnect.NewDispatcherService(reliable.NewDispatcher("")),
-			SCMPHandler: snet.DefaultSCMPHandler{
-				RevocationHandler: daemon.RevHandler{Connector: s.sdc},
-			},
-		}
-	*/
 
-	//
-	bindAddr, err := snet.ParseUDPAddr(localAddrStr)
+	s.bindAddr, err = snet.ParseUDPAddr(localAddrStr)
 	if err != nil {
 		log.Fatal("(SCIONgobind) Failed to parse local Address:", err)
 		return C.int(-1) //should never return
 	}
-	bindAddr.Host.Port = port //set the correct port
-	//TODO: Hier ist nicht klar welche Art von Timestamps aktiviert werden sollen
-	s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, bindAddr.IA, bindAddr.Host, addr.TxKernelHwRxKernelHw)
-	if err != nil {
-		log.Printf("(SCIONgobind)  Failed to register client socket:  %v", err)
-		return C.int(-1)
+	s.bindAddr.Host.Port = port //set the correct port
+
+	//Chrony's NTP-Server will not call this. Compare SCIONstartntp()
+	if int(callRegister) == 1 {
+		s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, s.bindAddr.IA, s.bindAddr.Host, s.scionTimestampingMode)
+		if err != nil {
+			log.Printf("(SCIONgobind)  Failed to register client socket:  %v", err)
+			return C.int(-1)
+		}
+
+		log.Printf("(SCIONgobind)--> bindAddr.IA=%v, bindAddr.Host=%v", s.bindAddr.IA, s.bindAddr.Host)
 	}
-
-	log.Printf("(SCIONgobind)--> bindAddr.IA=%v, bindAddr.Host=%v", bindAddr.IA, bindAddr.Host)
-
+	s.registerCalled = false
 	s.isbound = true
 	s.sent = make(chan int)
 	s.doneRcv = make(chan struct{})
@@ -526,9 +594,16 @@ func SCIONgobind(_fd C.int, _port C.uint16_t) C.int {
 	fdstatus[fd] = s //store it back
 	log.Printf("(SCIONgobind)--> Registered Port %v for fd=%v. rcvLogic() not started!", port, fd)
 
-	//TODO: ACHTUNG SETTINGS sockopt sind hier nicht gesetzt
-	//log.Printf("(SCIONgobind) Starting Rcv-Go-Routine")
-	//go s.rcvLogic() //bei send drin...
+	//Chrony's NTP-Server will not call this. Compare SCIONstartntp()
+	if int(callRegister) == 1 {
+		s.registerCalled = true
+		s.rcvLogicStarted = true
+		idRoutineRead++
+		s.idRoutineRead = idRoutineRead
+		fdstatus[fd] = s
+		log.Printf("(SCIONgobind)--> Starting Rcv-Go-Routine for fd=%v with idRoutineRead=%v", fd, idRoutineRead)
+		go s.rcvLogic()
+	}
 
 	return C.int(0) //TODO -1 for errors
 }
@@ -561,14 +636,13 @@ func (s *FDSTATUS) rcvLogic() {
 			//TODO decide if we really want to continue
 			continue
 		}
+
+		/*
+			This is an ERR_QUEUE_MSG probably a TX timestamp!!!
+		*/
 		if rcvMsgNTPTS.ov.IP == nil {
-			//err queue msg... this is a TX timestamp
 			nErrQueueMsgsReceived++
-			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received ERR_QUEUE_MSG", s.Fd, s.idRoutineRead)
-			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> KS-TS=%v HW-TS=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.pkt.KernelTS, rcvMsgNTPTS.pkt.HwTS)
-			//if rcvMsgNTPTS.pkt.KernelTS.Sec == 0 {
-			//	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> missing kernel ts", s.Fd, s.idRoutineRead)
-			//}
+			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received ERR_QUEUE_MSG: Kernel-TS=%v HW-TS=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.pkt.KernelTS, rcvMsgNTPTS.pkt.HwTS)
 
 			var msgTS sendMsgTS
 
@@ -579,12 +653,11 @@ func (s *FDSTATUS) rcvLogic() {
 			}
 
 			msgTS.pkt = &rcvMsgNTPTS.pkt
-			//msgTS.payload = payload
-			msgTS.sentTo = nil
 
-			//TODO Prüfe ob ich überall direkt structs zuweisen soll
-			//Zudem benötigt man ts3 jetzt eigentlich nciht mehr
-
+			//Why ts3 and also KenelTS and HwTS
+			//only one of ts[0], ts[2] will be non zero
+			//we do not need to know witch one in the SCIONgorecvmmsg()
+			//msgTS.KernelTS and msgTS.HwTS are stored because I return them now and can be useful for desing changes
 			var ts3 C.struct_scm_timestamping
 			//kernel ts
 			ts3.ts[0].tv_sec = C.long(rcvMsgNTPTS.pkt.KernelTS.Sec)
@@ -602,29 +675,24 @@ func (s *FDSTATUS) rcvLogic() {
 			msgTS.Ipi = rcvMsgNTPTS.pkt.Ipi
 
 			if s.txKERNELts && rcvMsgNTPTS.pkt.KernelTS.Sec != 0 {
-				msgTS.tsType = tskernel //not needed: DOCH aber auf eine andere art
-
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Kernel)=%v", s.Fd, s.idRoutineRead, ts3)
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS", s.Fd, s.idRoutineRead)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS ts3(Kernel)=%v", s.Fd, s.idRoutineRead, ts3)
 				s.sendQueueTS <- msgTS
 			}
 			if s.txHWts && rcvMsgNTPTS.pkt.HwTS.Sec != 0 {
-				msgTS.tsType = tshardware //not needed
-
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(HW)=%v", s.Fd, s.idRoutineRead, ts3)
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS", s.Fd, s.idRoutineRead)
-				if ts3.ts[2].tv_sec != 0 {
-					fmt.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> HURRAY!!!!! ts3(HW)=%v", s.Fd, s.idRoutineRead, ts3)
-				}
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Calling s.sendQueueTS <- msgTS ts3(HW)=%v", s.Fd, s.idRoutineRead, ts3)
 				s.sendQueueTS <- msgTS
+			}
+			if !s.txHWts && msgTS.HwTS.Sec != 0 { //should not happen
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received a Tx-HW-Ts but will not forward it, as it hasn't been requested %v\n", s.Fd, s.idRoutineRead, msgTS.HwTS)
 			}
 
 		} else {
-			// a real message
+			/*
+				This is a normal message... probably an NTP message and Rx Timestamps!!!
+			*/
+
 			nMessagesReceived++
-			//fakeHardwareRxTime := time.Now() //HW time komplett anders
-			//fakeKernelRxTime := time.Now()   //HW time komplett anders
-			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received Packet!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
+			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received NTP Packet: Kernel-TS=%v HW-TS=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.pkt.KernelTS, rcvMsgNTPTS.pkt.HwTS)
 
 			//Needed? If the payload can be extracted there should be a message
 			_, ok := rcvMsgNTPTS.pkt.Payload.(snet.UDPPayload)
@@ -640,50 +708,34 @@ func (s *FDSTATUS) rcvLogic() {
 			rcvMsgNTPTS.Ipi = rcvMsgNTPTS.pkt.Ipi
 
 			if s.rxKERNELts {
-				rcvMsgNTPTS.tsType = tskernel
-				//kernel ts
+				//a kernel ts
 				rcvMsgNTPTS.ts3.ts[0].tv_sec = C.long(rcvMsgNTPTS.pkt.KernelTS.Sec)
 				rcvMsgNTPTS.ts3.ts[0].tv_nsec = C.long(rcvMsgNTPTS.pkt.KernelTS.Nsec)
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Kernel)=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.ts3)
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS", s.Fd, s.idRoutineRead)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Returning Kernel-Ts %v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.KernelTS)
 			}
 
 			if s.rxHWts {
-				rcvMsgNTPTS.tsType = tshardware
-				if s.rxKERNELts {
-					rcvMsgNTPTS.tsType = tskernelhardware
-				}
-				//hw ts
+				//a hw ts
 				rcvMsgNTPTS.ts3.ts[2].tv_sec = C.long(rcvMsgNTPTS.pkt.HwTS.Sec)
 				rcvMsgNTPTS.ts3.ts[2].tv_nsec = C.long(rcvMsgNTPTS.pkt.HwTS.Nsec)
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> ts3(Hw)=%v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.ts3)
-				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS", s.Fd, s.idRoutineRead)
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Returning Hw-Ts %v", s.Fd, s.idRoutineRead, rcvMsgNTPTS.HwTS)
+			}
+
+			if !s.txHWts && rcvMsgNTPTS.HwTS.Sec != 0 {
+				//Hint: We do not add it to ts3 and therefore will not distrub the client if it is looking at those values
+				log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Received a Rx-HW-Ts but it hasn't been requested %v (expected if the option is activated in Scionproto\n", s.Fd, s.idRoutineRead, rcvMsgNTPTS.HwTS)
 			}
 
 			/* the only thing really important comes here.. */
-			log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> s.rcvQueueNTPTS <- rcvMsgNTPTS!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", s.Fd, s.idRoutineRead)
 			s.rcvQueueNTPTS <- rcvMsgNTPTS
 		}
 	}
 	s.rcvLogicStarted = false
-	//Make some noise, I want to be seen in the logfile
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
-	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
 	log.Printf("(rcvLogic fd=%v idRoutineRead=%v) ----> Finished recv my message. Returning.", s.Fd, s.idRoutineRead)
 
 }
 
-//SCIONgosetsockopt gets called each time a setsockopt() is executed.
+//SCIONgosetsockopt gets called each time a setsockopt() is executed for So_TIMESTAMPING options.
 //Settings are encoded inside of Sinfo. Some of the options are explicitely set in go's memory (redundant).
 //export SCIONgosetsockopt
 func SCIONgosetsockopt(_fd C.int) C.int {
@@ -697,18 +749,34 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 	/*Will be set everytime the function is called....
 	int level_optname_value[SCION_LE_LEN][SCION_OPTNAME_LEN]; //optval !=0 0==disabled contains all the other informations
 	*/
-	s.createTxTimestamp = int(s.Sinfo.createTxTimestamp) == 1
-	s.createRxTimestamp = int(s.Sinfo.createRxTimestamp) == 1
-	s.txKERNELts = s.createTxTimestamp
-	s.txHWts = s.createTxTimestamp //change this logic
-	s.rxKERNELts = s.createRxTimestamp
-	s.rxHWts = s.createRxTimestamp //change this logic
+	createTxTimestamp := int(s.Sinfo.createTxTimestamp) == 1
+	createRxTimestamp := int(s.Sinfo.createRxTimestamp) == 1
+	enableHwTimestamp := int(s.Sinfo.createHwTimestamp) == 1
+
+	s.txKERNELts = createTxTimestamp
+	s.txHWts = createTxTimestamp && enableHwTimestamp
+	s.rxKERNELts = createRxTimestamp
+	s.rxHWts = createRxTimestamp && enableHwTimestamp
+
+	if createTxTimestamp && createRxTimestamp && enableHwTimestamp {
+		s.scionTimestampingMode = addr.TxKernelHwRxKernelHw
+	} else if createTxTimestamp && createRxTimestamp {
+		s.scionTimestampingMode = addr.TxKernelRxKernel
+	} else if createRxTimestamp && enableHwTimestamp {
+		s.scionTimestampingMode = addr.RxKernelHw
+	} else if createRxTimestamp {
+		s.scionTimestampingMode = addr.RxKernel
+	} else {
+		s.scionTimestampingMode = addr.SvcNone
+	}
 
 	fdstatus[fd] = s //store it back
 
 	log.Printf("(SCIONgosetsockopt) |--> Called for socket %d. Checking settings...\n", fd)
-	log.Printf("(SCIONgosetsockopt) |--> createTxTimestamp=%v", s.createTxTimestamp)
-	log.Printf("(SCIONgosetsockopt) |--> createRxTimestamp=%v", s.createRxTimestamp)
+	log.Printf("(SCIONgosetsockopt) |--> createTxTimestamp=%v", createTxTimestamp)
+	log.Printf("(SCIONgosetsockopt) |--> createRxTimestamp=%v", createRxTimestamp)
+	log.Printf("(SCIONgosetsockopt) |--> enableHwTimestamp=%v", enableHwTimestamp)
+	log.Printf("(SCIONgosetsockopt) |--> scionTimestampingMode=%v", s.scionTimestampingMode)
 
 	/*On success, zero is returned for the standard options.  On error, -1
 	is returned, and errno is set appropriately.*/
@@ -716,7 +784,8 @@ func SCIONgosetsockopt(_fd C.int) C.int {
 }
 
 //SCIONgosocket creates the needed datastructure to keep state in the SCION-GO-World.
-//sinfo is a pointer into C's memory.
+//sinfo is a pointer into C's memory. domain, _type and protocol aren't used at the moment, as the are contained in sinfo
+//Hint: Interface is designed to allow for future changes
 //export SCIONgosocket
 func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr) C.int {
 	fd := int(sinfo.fd)
@@ -728,11 +797,11 @@ func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr)
 		return C.int(-1) //TODOdefine correct behaviour
 	}
 
-	newState := FDSTATUS{Fd: fd, Sinfo: sinfo}
+	newState := FDSTATUS{Fd: fd, Sinfo: sinfo, scionTimestampingMode: addr.SvcNone}
 	//store it
 	fdstatus[fd] = newState
 
-	//code snippets
+	//code snippets: What we could do
 	/*
 		domainS := int(sinfo.domain)
 		typeS := int(sinfo._type)
@@ -741,23 +810,28 @@ func SCIONgosocket(domain C.int, _type C.int, protocol C.int, sinfo C.fdInfoPtr)
 		fmt.Printf("\tdomain=%d type=%d protocol=%d\n", domain, _type, protocol)
 		fmt.Printf("fd=%d domainS=%d typeS=%d protocolS=%d connectionTypeS=%d\nsinfo=%v\n", fd, domainS, typeS, protocolS, connectionTypeS, sinfo)
 	*/
-	d := int(fdstatus[fd].Sinfo.domain)
-	t := int(fdstatus[fd].Sinfo._type)
-	p := int(fdstatus[fd].Sinfo.protocol)
-	log.Printf("(SCIONgosocket) ----> domain=%v type=%v protocol=%v", d, t, p)
-	if t == int(C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK) {
-		log.Printf("(SCIONgosocket) ----> type == C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK")
-	}
-	if int(fdstatus[fd].Sinfo._type&C.SOCK_DGRAM) == C.SOCK_DGRAM {
-		log.Printf("(SCIONgosocket) ----> type => C.SOCK_DGRAM")
-	}
-	if int(fdstatus[fd].Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK {
-		log.Printf("(SCIONgosocket) ----> type => C.SOCK_NONBLOCK")
+	//Just debugging and pretty printing
+	if C.GODEBUG == 1 {
+		d := int(fdstatus[fd].Sinfo.domain)
+		t := int(fdstatus[fd].Sinfo._type)
+		p := int(fdstatus[fd].Sinfo.protocol)
+		log.Printf("(SCIONgosocket) ----> domain=%v type=%v protocol=%v", d, t, p)
+		if t == int(C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK) {
+			log.Printf("(SCIONgosocket) ----> type == C.SOCK_DGRAM|C.SOCK_CLOEXEC|C.SOCK_NONBLOCK")
+		}
+		if int(fdstatus[fd].Sinfo._type&C.SOCK_DGRAM) == C.SOCK_DGRAM {
+			log.Printf("(SCIONgosocket) ----> type => C.SOCK_DGRAM")
+		}
+		if int(fdstatus[fd].Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK {
+			log.Printf("(SCIONgosocket) ----> type => C.SOCK_NONBLOCK")
+		}
 	}
 
 	return C.int(newState.Fd)
 }
 
+// SCIONgoclose closes all routines working with this (virtual) fd and delete any datastructures created to keep state
+//
 //export SCIONgoclose
 func SCIONgoclose(_fd C.int) C.int {
 	fd := int(_fd)
@@ -769,39 +843,19 @@ func SCIONgoclose(_fd C.int) C.int {
 	}
 	if s.doneRcv != nil {
 		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> closing doneRcv channel for idRoutineRead=%v", s.idRoutineRead)
-
 		close(s.doneRcv)
 	}
-	//todo: what else needs to be done?
 
 	if s.cancel != nil {
+		//This will force any blocking read call to return
 		s.cancel()
 	}
 
-	/*if s.sdc != nil {
-		//unklar ob dass alle connections killt... weil ich Backgroundcontext genommen habe,
-		s.sdc.Close(s.ctx)
-	}*/
 	if s.conn != nil {
 		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
-		log.Printf("(SCIONgoclose) ----> s.conn.Close() for idRoutineRead=%v", s.idRoutineRead)
-
 		s.conn.Close()
 	}
 
-	//close dispatcher???? s.pds
-	//time.Sleep(6 * time.Second)
 	delete(fdstatus, int(fd))
 
 	//TODO close() returns zero on success.  On error, -1 is returned, and errno
@@ -847,15 +901,13 @@ Optimierung nötig!!!!
 Warning: Chronyd is using select() as a timeout mechanism
 => "Iff chrony is a client and plans to send a msg in 60sec, it will call select() with an appropriate timeout, return without any ready fd's and then check for sendtimeouts...."
 REMARK: At the moment there is no write-Queue => all Flags will be set to  zero if present
-	fmt.Printf("Before calling select: readfds=%v\n", readfds)
-	n, err := syscall.Select(int(nfds),
-		(*syscall.FdSet)(unsafe.Pointer(readfds)),
-		(*syscall.FdSet)(unsafe.Pointer(writefds)),
-		(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
-		(*syscall.Timeval)(unsafe.Pointer(timeout)))
+
+As a simple solution: checkNTPfile and checkNTPexcept are used to tell recevmsg to also check the c-world
+We always call the go world, this will be correct in most cases and it always returns.
+Keep in mind, this is just a test. I want to get rid of everything that comes into play when we have to receive tx-ts over scion.
 */
 //export SCIONselect
-func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds C.fdsetPtr, timeout C.timevalPtr) C.int {
+func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds C.fdsetPtr, timeout C.timevalPtr, checkNTPfile *C.int, checkNTPexcept *C.int) C.int {
 	start := time.Now()
 	var tvsec C.__time_t
 	var tvusec C.__suseconds_t
@@ -924,7 +976,8 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 				checkBothWorlds = true
 				//log.Printf("(SCIONselect) ACHTUNG: checkBothWorlds kann für NTP Server nicht aktiviert werden, da recv (noch) nicht vorbereitet")
 			}
-		}
+		} //What was the other case? :-) We don't care. We could continue here if dualmode is disabled
+
 		var rIsSet, eIsSet, wIsSet bool
 		if readfds != nil {
 			rIsSet = rset.IsSet(fdPtr)
@@ -942,7 +995,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 				&fdset{
 					fd:                fd,
 					exists:            exists,          //if they don't exist => must be a c-Sockets
-					checkBothWorlds:   checkBothWorlds, //also check c-Sockets
+					checkBothWorlds:   checkBothWorlds, //also check c-Sockets: for the NTPServer relevant
 					readSelected:      rIsSet,
 					writeSelected:     wIsSet,
 					exceptSelected:    eIsSet,
@@ -1060,7 +1113,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 
 			//evaluate response
 			for _, fdset := range fdsets {
-				if !fdset.exists || fdset.checkBothWorlds {
+				if !fdset.exists || fdset.checkBothWorlds { //a c-world only socket or the NTPServer
 					var fdPtr uintptr
 					fdPtr = uintptr(fdset.fd)
 					var didSomeThing bool
@@ -1070,6 +1123,9 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 						if fdset.readReady != true {
 							numOfBitsSet++
 							didSomeThing = true
+						}
+						if fdset.checkBothWorlds { //this is the NTPServer
+							*checkNTPfile = C.int(1)
 						}
 					}
 
@@ -1086,6 +1142,9 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 						if fdset.exceptReady != true {
 							numOfBitsSet++
 							didSomeThing = true
+						}
+						if fdset.checkBothWorlds { //this is the NTPServer
+							*checkNTPexcept = C.int(1)
 						}
 					}
 					if didSomeThing {
@@ -1156,12 +1215,26 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 }
 
 //export SCIONgosendmsg
-func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAddrString *C.char, _uglyHack C.int) C.ssize_t {
+func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAddrString *C.char, _requestTxTimestamp C.int) C.ssize_t {
 	fd := int(_fd)
 	_, exists := fdstatus[fd]
 	if !exists {
 		log.Fatalf("(SCIONgosendmsg) Non-existing fdstatus[%d]\n", fd) //change this to fatal?
 		return C.ssize_t(-1)                                           //TODO correct return value for sendmsg()?
+	}
+
+	if !fdstatus[fd].registerCalled {
+		s := fdstatus[fd]
+		var err error
+		s.conn, s.localPortSCION, err = s.pds.Register(s.ctx, localAddr.IA, localAddr.Host, s.scionTimestampingMode)
+		if err != nil {
+			log.Printf("(SCIONgosendmsg) Failed to register client socket: %v. This can happen if the requested timestamping mode (%v) isn't supported!", err, s.scionTimestampingMode)
+			return C.ssize_t(-1)
+		}
+		s.registerCalled = true
+		fdstatus[s.Fd] = s
+		log.Printf("(SCIONgosendmsg)--> Called Register() localAddr.IA=%v, localAddr.Host=%v s.scionTimestampingMode=%v", localAddr.IA, localAddr.Host, s.scionTimestampingMode)
+
 	}
 
 	if !fdstatus[fd].rcvLogicStarted {
@@ -1180,21 +1253,16 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAdd
 	s := fdstatus[fd]
 
 	msg := *(*syscall.Msghdr)(unsafe.Pointer(message))
-	ntp := *(*NTP_Packet)(unsafe.Pointer(msg.Iov.Base))
 
 	var remoteAddrString string
 	if s.isNTPServer {
 		remoteAddrString = C.GoString(_remoteAddrString)
-		log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, remoteAddrString, "fake scion")
-	}
-	if s.connected {
-		log.Printf("(SCIONgosendmsg) sending ntp packet %v to %v i.e. %v\n", ntp, fdstatus[fd].remoteAddress, fdstatus[fd].remoteAddressSCION)
 	}
 
-	var uglyHack int
-	uglyHack = int(_uglyHack)
+	var requestTxTimestamp bool
+	requestTxTimestamp = int(_requestTxTimestamp) > 0
 
-	go s.sendmsgOverScion(msg.Iov, remoteAddrString, uglyHack)
+	go s.sendmsgOverScion(msg.Iov, remoteAddrString, requestTxTimestamp)
 
 	//if the call is blocking, this channel will get the value after msg has been sent
 	bytesSent := <-s.sent
@@ -1202,8 +1270,27 @@ func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAdd
 
 }
 
-func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString string, uglyHack int) {
+func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString string, requestTxTimestamp bool) {
 	log.Printf("(sendmsgOverScion fd=%v) Started", s.Fd)
+
+	/* // serach for 4242666 in this document
+	//we could add this to the packet and forward it to the client
+	tsMode := addr.SvcNone
+	if requestTxTimestamp {
+		log.Printf("(sendmsgOverScion fd=%v) |----> We have to activate Tx-Timestamps for this packet\n", s.Fd)
+		switch s.scionTimestampingMode {
+		case addr.RxKernel:
+			tsMode = addr.TxKernelRxKernel
+		case addr.RxKernelHw:
+			tsMode = addr.TxKernelHwRxKernelHw
+			//If we already have a Tx we do not change it.
+		case addr.TxKernelRxKernel:
+			tsMode = addr.TxKernelRxKernel
+		case addr.TxKernelHwRxKernelHw:
+			tsMode = addr.TxKernelHwRxKernelHw
+		}
+	}
+	*/
 
 	nonblocking := int(s.Sinfo._type&C.SOCK_NONBLOCK) == C.SOCK_NONBLOCK
 
@@ -1242,28 +1329,7 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 		s.sent <- int(iovecLen)
 	}
 
-	/*
-		if s.createTxTimestamp {
-			log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps", s.Fd)
-		}
-
-		var uglyKernelTS bool
-		if uglyHack == (int(C.SOF_TIMESTAMPING_TX_SOFTWARE | C.SOF_TIMESTAMPING_TX_HARDWARE)) {
-			log.Printf("(sendmsgOverScion fd=%v) |----> will create TX-Timestamps because it is specific requested for this packet", s.Fd)
-			uglyKernelTS = true
-		}
-	*/
-
 	payload := C.GoBytes(unsafe.Pointer(iovecBase), C.int(iovecLen))
-
-	// test it
-	/*
-		ntp := *(*NTP_Packet)(C.CBytes(payload2))
-		fmt.Printf("ntp = %v\n", ntp)
-	*/
-	//fmt.Printf("iovecLen = %v\tiovecBase = %v\tpayload = %v\n", iovecLen, iovecBase, payload)
-
-	conn := s.conn
 
 	log.Printf("(sendmsgOverScion) Sending in %v on %v:%d - %v\n", localAddr.IA, localAddr.Host.IP, s.localPortSCION, addr.SvcNone)
 	log.Printf("(sendmsgOverScion) \tDestination:  IP:Port ist in %v on %v:%d - %v\n", remoteAddr.IA, remoteAddr.Host.IP, remoteAddr.Host.Port, addr.SvcNone)
@@ -1287,65 +1353,19 @@ func (s *FDSTATUS) sendmsgOverScion(iovec *syscall.Iovec, remoteAddrString strin
 		},
 	}
 
-	//ALWAYS create TX timestamp..--- change this
-	//fakeKernelSentTime := time.Now()   //HW time komplett anders
-	//fakeHardwareSentTime := time.Now() //HW time komplett anders
-	err = conn.WriteTo(pkt, remoteAddr.NextHop)
+	err = s.conn.WriteTo(pkt, remoteAddr.NextHop)
 	if err != nil {
 		log.Printf("(sendmsgOverScion) [fd=%d] Failed to write packet: %v\n", s.Fd, err)
 		s.sent <- int(-1)
 		return
 	}
 
-	//if there is a blocking call, it will return now
+	//if there is a blocking call, it will return now the number of sent bytes
+	//Why we use a channel instead of just returning int(iovecLen): In the initial design there where more tasks after the WriteTo call
+	//still possible... probably we will send the messages out with a separate socket and receive some Tx timestamps
 	if !nonblocking {
 		s.sent <- int(iovecLen)
 	}
-
-	/*
-			THis disables the timestamps.... now we use the one received from scionproto
-			THis disables the timestamps.... now we use the one received from scionproto
-			THis disables the timestamps.... now we use the one received from scionproto
-			THis disables the timestamps.... now we use the one received from scionproto
-			THis disables the timestamps.... now we use the one received from scionproto
-		sendMsg := false
-		var msgTS sendMsgTS
-
-		sendMsg = true
-		msgTS.pkt = pkt
-		//msgTS.payload = payload
-		msgTS.sentTo = remoteAddr
-
-		//add TS's: Src needs to be adpted afte SCION provides the correct TS's
-		if s.txKERNELts || uglyKernelTS {
-			msgTS.tsType = tskernel //not needed
-			sendMsg = true
-			var ts3 C.struct_scm_timestamping
-			//kernel ts
-			ts3.ts[0].tv_sec = C.long(fakeKernelSentTime.Unix())
-			ts3.ts[0].tv_nsec = C.long(fakeKernelSentTime.UnixNano() - fakeKernelSentTime.Unix()*1e9)
-			log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(Kernel)=%v", s.Fd, ts3)
-			msgTS.ts3 = ts3
-			log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
-			s.sendQueueTS <- msgTS
-		}
-		if s.txHWts {
-			msgTS.tsType = tshardware //not needed
-			sendMsg = true
-			var ts3 C.struct_scm_timestamping
-			//hardware ts
-			ts3.ts[2].tv_sec = C.long(fakeHardwareSentTime.Unix())
-			ts3.ts[2].tv_nsec = C.long(fakeHardwareSentTime.UnixNano() - fakeHardwareSentTime.Unix()*1e9)
-			log.Printf("(sendmsgOverScion fd=%v) \t-----> ts3(HW)=%v", s.Fd, ts3)
-			msgTS.ts3 = ts3
-			log.Printf("(sendmsgOverScion fd=%v) Calling s.sendQueueTS <- msgTS", s.Fd)
-			s.sendQueueTS <- msgTS
-		}
-
-		if !sendMsg {
-			log.Printf("(sendmsgOverScion fd=%v) Will not create any messages for Timestamps.", s.Fd)
-		}
-	*/
 
 	log.Printf("(sendmsgOverScion) \t----->Done")
 }
@@ -1425,11 +1445,11 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			//chang this: What we need is msgContrLen. Reason: cmsgNextHdr fails if memory is not nulled
 			var bufferPtrDelete *([256]C.char)
 			bufferPtrDelete = (*([256]C.char))(msghdr.msg_control)
-			log.Printf("%v", bufferPtrDelete)
+			//log.Printf("%v", bufferPtrDelete)
 			for i := 0; i < 256 && i < msgContrLen; i++ { //Quasi memset einfach ohne C-call (Prüfe was schneller ist)
 				bufferPtrDelete[i] = 0x00
 			}
-			log.Printf("%v", bufferPtrDelete)
+			//log.Printf("%v", bufferPtrDelete)
 
 			msghdr.msg_namelen = C.uint(0)
 			//msghdr.msg_name is null
@@ -1482,10 +1502,8 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			*(*C.uint32_t)(unsafe.Pointer(&bufferPtr[offsetNTP+16])) = dstIPTest
 
 			//port in network byte order
-			bufferPtr[offsetNTP+ihl+2] = 0   //shoud be [22]
-			bufferPtr[offsetNTP+ihl+3] = 123 //shoud be [23]
-			//var dstPort C.uint16_t
-			//dstPort = *(*C.uint16_t)(unsafe.Pointer(&bufferPtr[offsetNTP+ihl+2]))
+			//bufferPtr[offsetNTP+ihl+2] = 0   //shoud be [22]
+			//bufferPtr[offsetNTP+ihl+3] = 123 //shoud be [23]
 			*(*C.uint16_t)(unsafe.Pointer(&bufferPtr[offsetNTP+ihl+2])) = C.htons(C.uint16_t(pld.DstPort))
 
 			offsetNTP += ihl + 8 //should be 42
@@ -1530,7 +1548,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			cmsgDataPtr = cmsgData(cmsg)
 
 			//ACHTUNG: Kopiere hier Kernel und HW rein... unklar ob Chrony logik damit klarkommt
-			//====> nein verwirft dann beide TS wenn HW "ungültig ist"
+			//====> nein verwirft dann beide TS wenn HW "ungültig ist" => aktuell ist nur immer ts3[0] oder ts3[2] gesetzt
 			//habe sie beim erstellen entfernt
 			//Allenfalls sollte man hier memcpy() nehmen.....
 			*(*C.struct_scm_timestamping)(unsafe.Pointer(cmsgDataPtr)) = sendMsgTS.ts3
@@ -1725,39 +1743,39 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 }
 
 /* eigentlich nur ein "cast" */
-func copyCstructMSGHDR(message C.msghdrConstPtr) (msg syscall.Msghdr) {
+//func copyCstructMSGHDR(message C.msghdrConstPtr) (msg syscall.Msghdr) {
 
-	// C DATASTRUCTURE
-	// struct msghdr {
+// C DATASTRUCTURE
+// struct msghdr {
 
-	//----->The msg_name and msg_namelen members are used when the socket is not connected (e.g., an unconnected UDP socket).
-	// 	void         *msg_name;        /* protocol address */
-	// 	socklen_t     msg_namelen;     /* size of protocol address */
+//----->The msg_name and msg_namelen members are used when the socket is not connected (e.g., an unconnected UDP socket).
+// 	void         *msg_name;        /* protocol address */
+// 	socklen_t     msg_namelen;     /* size of protocol address */
 
-	//----->The msg_iov and msg_iovlen members specify the array of input or output buffers (the array of iovec structures),
-	// 	struct iovec *msg_iov;         /* scatter/gather array */
-	// 	int           msg_iovlen;      /* # elements in msg_iov */
+//----->The msg_iov and msg_iovlen members specify the array of input or output buffers (the array of iovec structures),
+// 	struct iovec *msg_iov;         /* scatter/gather array */
+// 	int           msg_iovlen;      /* # elements in msg_iov */
 
-	//---->The msg_control and msg_controllen members specify the location and size of the optional ancillary data.
-	// 	void         *msg_control;     /* ancillary data (cmsghdr struct) */
-	// 	socklen_t     msg_controllen;  /* length of ancillary data */
+//---->The msg_control and msg_controllen members specify the location and size of the optional ancillary data.
+// 	void         *msg_control;     /* ancillary data (cmsghdr struct) */
+// 	socklen_t     msg_controllen;  /* length of ancillary data */
 
-	//---->The msg_flags member is IGNORED by sendmsg because this function USES the flags argument to drive its output processing. This means if we want to set the MSG_DONTWAIT flag in a call to sendmsg, we set the flags argument to this value; setting the msg_flags member to this value has no effect.
-	// 	int           msg_flags;       /* flags returned by recvmsg() */
-	//   };
+//---->The msg_flags member is IGNORED by sendmsg because this function USES the flags argument to drive its output processing. This means if we want to set the MSG_DONTWAIT flag in a call to sendmsg, we set the flags argument to this value; setting the msg_flags member to this value has no effect.
+// 	int           msg_flags;       /* flags returned by recvmsg() */
+//   };
 
-	/* GO DATASTRUCTURE
-	type Msghdr struct {
-		Name       *byte
-		Namelen    uint32
-		Iov        *Iovec
-		Iovlen     uint64
-		Control    *byte
-		Controllen uint64
-		Flags      int32
-		_          [4]byte
-	}*/
-
+/* GO DATASTRUCTURE
+type Msghdr struct {
+	Name       *byte
+	Namelen    uint32
+	Iov        *Iovec
+	Iovlen     uint64
+	Control    *byte
+	Controllen uint64
+	Flags      int32
+	_          [4]byte
+}*/
+/*
 	msg = *(*syscall.Msghdr)(unsafe.Pointer(message))
 	//s, _ := json.MarshalIndent(msg, "", "\t")
 	//fmt.Println(string(s))
@@ -1765,20 +1783,15 @@ func copyCstructMSGHDR(message C.msghdrConstPtr) (msg syscall.Msghdr) {
 	return msg
 
 }
+*/
 
 /* eigentlich nur ein "cast" */
+/*
 func copyCstructNTP(iovec *syscall.Iovec) (ntp NTP_Packet) {
-
-	/* stimmt überhaupt nicht */
-	//ntpSize := unsafe.Sizeof(NTP_Packet{})
-	//iolen := iovec.Len
-	//fmt.Println("iolen = %d       ntpSize = %d", iolen, ntpSize)
-
 	ntp = *(*NTP_Packet)(unsafe.Pointer(iovec.Base))
-	//fmt.Printf("ntp = %v\n", ntp)
 	return ntp
-
 }
+*/
 
 func main() {
 	fmt.Println("Doing some tests...")

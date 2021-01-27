@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 	"unsafe"
 
 	"github.com/scionproto/scion/go/lib/addr"
@@ -128,9 +129,11 @@ func runServer(sciondAddr string, localAddr snet.UDPAddr) {
 
 		log.Printf("////////////////////////////////////////////////////// Step 3: receive ntp packet response as common UDP packet")
 		var buf [512]byte
+		timeout := time.Now().Add(1000 * time.Millisecond)
+		connUDP.SetReadDeadline(timeout)
 		n, err = connUDP.Read(buf[0:])
 		if err != nil {
-			log.Fatal(err)
+			continue
 		}
 		fmt.Printf("\t---->n=%v bytes received using common udp connection\n", n)
 		//adhoc security.... improve this

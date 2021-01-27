@@ -1,8 +1,7 @@
 #define SCIONUDPDUALMODE 1
 
 
-
-#define SENDNTPPERIP 1 //remove this
+#define SCIONERROR ECONNREFUSED //könnten da auch als Rückgabewert diekt codieren und dann auf -1 ändern
 
 #define MSGBUFFERSIZE 100
 #define MSGBUFFERSIZESERVER 1000
@@ -127,12 +126,12 @@ typedef enum
 typedef struct fdInfo
 {
    int fd;
-   int if_index;
+   //int if_index; //not used anymore
    int domain;
    int type;
    int protocol;
    int connectionType; //rename this
-   int socketType;  /*  >0 means there is no "socket" in scion. The value assigned can give a hint for the reason:
+   int socketType;     /*  >0 means there is no "socket" in scion. The value assigned can give a hint for the reason:
                            SCION_socket(..."tcp"...)
                            SCION_connect(..."notascionaddress"...)
                            SCION_bind(...IS_CMD_SOCKET....)
@@ -143,7 +142,7 @@ typedef struct fdInfo
    int level_optname_value[SCION_LE_LEN][SCION_OPTNAME_LEN]; //optval !=0 0==disabled
    int createTxTimestamp;                                    // shortcut...
    int createRxTimestamp;                                    //   ... compare SCION_setsockopt()
-   //int optval[SCION_OPTNAME_LEN];
+   int createHwTimestamp;                                    //Assumption: Same for Rx and Tx
 } fdInfo;
 
 typedef struct addressMapping
@@ -234,6 +233,8 @@ extern int SCION_select(int __nfds, fd_set *__restrict __readfds,
 int SCION_extract_udp_data(unsigned char *msg, NTP_Remote_Address *remote_addr, int len);
 
 void printNTPPacket(void *ntpPacket, int len);
+
+int getRequestedTxFlags(const struct msghdr *msg_hdr);
 
 int printMMSGHDR(struct mmsghdr *msgvec, int n, int SCION_TYPE);
 

@@ -67,7 +67,7 @@ all : go chronyd chronyc
 # There are some funky circular dependencies
 # I guess building and linking should be separated
 # Maybe it isn't possible, as the scion_api.h file is created by cgo, AFTER we need it
-
+# HINT: make clean is a good idea as we use cgo..... especially if c-structs are changed and you access them from golang
 # HINT: go.mod needs to be in chronys root folder
 go : 
 	go build -buildmode=c-shared -o scion/go/scion_api.so scion/go/*.go

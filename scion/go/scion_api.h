@@ -104,23 +104,33 @@ extern int SetLocalAddr(char* _localAddr);
 extern int IsScionNode(char* _remoteAddrString);
 
 //SCIONgoconnect creates the needed objects to call/recv data from a scion connections.
-//Attention: This doesn't start a receive method!
-//The send ntp packets as a client: call socket(), connect(), setsockopt(), send*(), *will also start receive method
-extern int SCIONgoconnect(int _fd);
+//Attention: This doesn't start a receive method! And probably no Register() call
+//To send ntp packets as a client, Chrony calls: socket(), connect(), setsockopt(), send*(), *will also start receive method
+extern int SCIONgoconnect(int _fd, int callRegister);
 
-//SCIONgobind Used to start recv Logic: now all socket options should be set
+// SCIONstartntp Used to call Scion's Register() and to start recv Logic: now all socket options should be set.
+//
+// Compare the listing at the end.
 extern int SCIONstartntp();
 
-//SCIONgobind tbd....
-extern int SCIONgobind(int _fd, uint16_t _port);
+//SCIONgobind emulates a bind() call.
+//
+// callRegister "bool": compare comment in SCIONstartntp.
+// The assumption is, that callRegister will always be 0. At least as long as we do not open a scion-connection for the client interface.
+// Once we do it, we will be happy to directly start everythin at this point here (rcvlogic, Register()...)
+extern int SCIONgobind(int _fd, uint16_t _port, int callRegister);
 
-//SCIONgosetsockopt gets called each time a setsockopt() is executed.
+//SCIONgosetsockopt gets called each time a setsockopt() is executed for So_TIMESTAMPING options.
 //Settings are encoded inside of Sinfo. Some of the options are explicitely set in go's memory (redundant).
 extern int SCIONgosetsockopt(int _fd);
 
 //SCIONgosocket creates the needed datastructure to keep state in the SCION-GO-World.
-//sinfo is a pointer into C's memory.
+//sinfo is a pointer into C's memory. domain, _type and protocol aren't used at the moment, as the are contained in sinfo
+//Hint: Interface is designed to allow for future changes
 extern int SCIONgosocket(int domain, int _type, int protocol, fdInfoPtr sinfo);
+
+// SCIONgoclose closes all routines working with this (virtual) fd and delete any datastructures created to keep state
+//
 extern int SCIONgoclose(int _fd);
 
 /*
@@ -129,15 +139,13 @@ Optimierung nötig!!!!
 Warning: Chronyd is using select() as a timeout mechanism
 => "Iff chrony is a client and plans to send a msg in 60sec, it will call select() with an appropriate timeout, return without any ready fd's and then check for sendtimeouts...."
 REMARK: At the moment there is no write-Queue => all Flags will be set to  zero if present
-	fmt.Printf("Before calling select: readfds=%v\n", readfds)
-	n, err := syscall.Select(int(nfds),
-		(*syscall.FdSet)(unsafe.Pointer(readfds)),
-		(*syscall.FdSet)(unsafe.Pointer(writefds)),
-		(*syscall.FdSet)(unsafe.Pointer(exceptfds)),
-		(*syscall.Timeval)(unsafe.Pointer(timeout)))
+
+As a simple solution: checkNTPfile and checkNTPexcept are used to tell recevmsg to also check the c-world
+We always call the go world, this will be correct in most cases and it always returns.
+Keep in mind, this is just a test. I want to get rid of everything that comes into play when we have to receive tx-ts over scion.
 */
-extern int SCIONselect(int nfds, fdsetPtr readfds, fdsetPtr writefds, fdsetPtr exceptfds, timevalPtr timeout);
-extern ssize_t SCIONgosendmsg(int _fd, msghdrConstPtr message, int flags, char* _remoteAddrString, int _uglyHack);
+extern int SCIONselect(int nfds, fdsetPtr readfds, fdsetPtr writefds, fdsetPtr exceptfds, timevalPtr timeout, int* checkNTPfile, int* checkNTPexcept);
+extern ssize_t SCIONgosendmsg(int _fd, msghdrConstPtr message, int flags, char* _remoteAddrString, int _requestTxTimestamp);
 
 // SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff
 extern int SCIONgorecvmmsg(int _fd, mmsghdrPtr vmessages, unsigned int vlen, int flags, timespecPtr tmo);
