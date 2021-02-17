@@ -1613,6 +1613,20 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			msghdr = &msgvec[i].msg_hdr
 			var msgControllen C.size_t
 
+			//Buffer löschen????
+			var msgContrLen int
+			msgContrLen = int(msghdr.msg_controllen)
+			log.Printf("(SCIONgorecvmmsg) ----> msghdr.msg_control=%v msghdr.msg_controllen=%v msgContrLen=%v", msghdr.msg_control, msghdr.msg_controllen, msgContrLen)
+
+			//chang this: What we need is msgContrLen. Reason: cmsgNextHdr fails if memory is not nulled
+			var bufferPtrDelete *([256]C.char)
+			bufferPtrDelete = (*([256]C.char))(msghdr.msg_control)
+			//log.Printf("%v", bufferPtrDelete)
+			for i := 0; i < 256 && i < msgContrLen; i++ { //Quasi memset einfach ohne C-call (Prüfe was schneller ist)
+				bufferPtrDelete[i] = 0x00
+			}
+			//log.Printf("%v", bufferPtrDelete)
+
 			ipIP := rcvMsgNTPTS.pkt.Source.Host.IP().To4()
 			var srcIP C.uint32_t = C.uint32_t(binary.LittleEndian.Uint32(ipIP))
 			msghdr.msg_namelen = C.uint(16)
@@ -1699,7 +1713,7 @@ func SCIONgorecvmmsg(_fd C.int, vmessages C.mmsghdrPtr, vlen C.uint, flags C.int
 			(*C.struct_scm_ts_pktinfo)(unsafe.Pointer(cmsgDataPtr)).pkt_length = C.uint(rcvMsgNTPTS.PktLengthL2) //C.uint(pktLengtLayer2)
 
 			// Add SO_TIMESTAMPING
-			cmsg = cmsgNextHdr(msghdr, cmsg)
+			cmsg = cmsgNextHdr(msghdr, cmsg) //gib NULL zurück ohne delete (same problem: without deleting the memory the cmsg will calculate wrong bounds and retunr NULL)
 			dataSize = unsafe.Sizeof(rcvMsgNTPTS.ts3)
 			cmsg.cmsg_len = cmsgLen(C.size_t(dataSize))
 			msgControllen += cmsgSpace(C.size_t(dataSize))

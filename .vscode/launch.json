@@ -74,5 +74,105 @@
             "miDebuggerPath": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/gdb.bash",
             "preLaunchTask": "my make"
         }
+        ,
+        {
+            "name": "chrony AS1",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/chronyd",
+            //ACHTUNG: "-d -d"<==> When chronyd was compiled with debugging support, this option can be used twice to print also debugging messages.
+            //sudo ./chronyd -P 0 -4 -d -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf
+            "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chrony_AS_1.conf"],
+
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "miDebuggerPath": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/gdb.bash",
+            "preLaunchTask": "my make"
+        }
+        ,
+        {
+            "name": "chrony AS2",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/chronyd",
+            //ACHTUNG: "-d -d"<==> When chronyd was compiled with debugging support, this option can be used twice to print also debugging messages.
+            //sudo ./chronyd -P 0 -4 -d -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf
+            "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chrony_AS_2.conf"],
+
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "miDebuggerPath": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/gdb.bash",
+            "preLaunchTask": "my make"
+        }
+        ,
+        {
+            "name": "chrony AS3",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/chronyd",
+            //ACHTUNG: "-d -d"<==> When chronyd was compiled with debugging support, this option can be used twice to print also debugging messages.
+            //sudo ./chronyd -P 0 -4 -d -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf
+            "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chrony_AS_3.conf"],
+
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "miDebuggerPath": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/gdb.bash",
+            "preLaunchTask": "my make"
+        }
+        ,
+        {
+            "name": "chrony AS4",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${fileDirname}/chronyd",
+            //ACHTUNG: "-d -d"<==> When chronyd was compiled with debugging support, this option can be used twice to print also debugging messages.
+            //sudo ./chronyd -P 0 -4 -d -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuP52.conf
+            "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chrony_AS_4.conf"],
+
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "miDebuggerPath": "/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/gdb.bash",
+            "preLaunchTask": "my make"
+        }
     ]
 }
