@@ -36,20 +36,28 @@ SCION setting
 # Disable built-in time syn service
 sudo timedatectl set-ntp 0
 
-# Meinbergkarten Install jeweils nach Kernel Updates nötig
-
+# (Optional) Install Meinberg driver after kernel update
+```console
+#Install pre-requirements. Consult README in mbgtools for details.
 sudo apt-get install linux-headers-generic
 
-mbgtools download: Link= und entpacken
+#download and unpack mbgtools
+wget https://www.meinbergglobal.com/download/drivers/mbgtools-lx-4.2.14.tar.gz
 
-cd ~/Downloads/mbgtools-lx-4.2.14/
- * make clean
- * make
- * sudo make install
+#mbgtools build/install
+cd mbgtools-lx-4.2.14/
+make clean
+make
+sudo make install
 
-Nach der Installation kann das Kernelmodul erstmalig geladen werden.
- * sudo modprobe mbgclock
+#load the kernelmodule after installation
+sudo modprobe mbgclock
+```
+Useful Commands
+```console
+#Start the SHM driver, and provide infos about system clock. Chrony can use this reference clock with the following config: refclock SHM 0 poll 3 refid GNS1
+sudo mbgsvcd -f 
 
-Commands
- * sudo mbgsvcd -f //this starts the SHM driver
- * refclock SHM 0 poll 3 refid GNS1 //the needed configuration in chrony to use the ref clock 
+#details about used GNSS
+mbgstatus
+```
