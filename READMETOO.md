@@ -1,3 +1,14 @@
+# Build-it
+Define your SCIONDIR and run ./configure with the additional option --SCIONdir
+
+./configure --SCIONdir=$SCIONDIR
+
+
+./configure --SCIONdir=/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/scionproto --enable-godebug --enable-debug
+
+HINT: Use ./configure --help
+
+
 # Disable built-in time syn service
 sudo timedatectl set-ntp 0
 

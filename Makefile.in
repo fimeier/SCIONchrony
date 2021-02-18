@@ -26,6 +26,7 @@ BINDIR = @BINDIR@
 SBINDIR = @SBINDIR@
 LOCALSTATEDIR = @LOCALSTATEDIR@
 CHRONYVARDIR = @CHRONYVARDIR@
+SCIONDIR = @SCIONDIR@ #not in use
 DESTDIR =
 
 CC = @CC@
@@ -35,31 +36,43 @@ LDFLAGS = @LDFLAGS@
 
 EXTRA_OBJS = @EXTRA_OBJS@
 
+EXTRA_OBJS_SCION = scion.o
+
 OBJS = array.o cmdparse.o conf.o local.o logging.o main.o memory.o \
        reference.o regress.o rtc.o samplefilt.o sched.o socket.o sources.o sourcestats.o \
-       stubs.o smooth.o sys.o sys_null.o tempcomp.o util.o $(EXTRA_OBJS)
+       stubs.o smooth.o sys.o sys_null.o tempcomp.o util.o $(EXTRA_OBJS) $(EXTRA_OBJS_SCION)
 
 EXTRA_CLI_OBJS = @EXTRA_CLI_OBJS@
 
 CLI_OBJS = array.o client.o cmdparse.o getdate.o memory.o nameserv.o \
-           pktlength.o socket.o util.o $(EXTRA_CLI_OBJS)
+           pktlength.o socket.o util.o $(EXTRA_CLI_OBJS) $(EXTRA_OBJS_SCION)
 
 ALL_OBJS = $(OBJS) $(CLI_OBJS)
 
 LIBS = @LIBS@
 EXTRA_LIBS = @EXTRA_LIBS@
 EXTRA_CLI_LIBS = @EXTRA_CLI_LIBS@
+EXTRA_LIBS_SCION = $(CURDIR)/scion/go/scion_api.so
 
 # Until we have a main procedure we can link, just build object files
 # to test compilation
 
-all : chronyd chronyc
+all : go chronyd chronyc
+	@echo "****REMARK*****\nBuild it twice to get rid of missing include scion/go/scion_api.h"
+
+# There are some funky circular dependencies
+# I guess building and linking should be separated
+# Maybe it isn't possible, as the scion_api.h file is created by cgo, AFTER we need it
+# HINT: "make clean" is a good idea as we use cgo..... especially if c-structs are changed and you access them from golang
+# HINT: go.mod needs to be in chronys root folder
+go : 
+	go build -buildmode=c-shared -o scion/go/scion_api.so scion/go/*.go
 
 chronyd : $(OBJS)
-	$(CC) $(CFLAGS) -o chronyd $(OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_LIBS)
+	$(CC) $(CFLAGS) -o chronyd $(OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_LIBS) $(EXTRA_LIBS_SCION)
 
 chronyc : $(CLI_OBJS)
-	$(CC) $(CFLAGS) -o chronyc $(CLI_OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_CLI_LIBS)
+	$(CC) $(CFLAGS) -o chronyc $(CLI_OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_CLI_LIBS) $(EXTRA_LIBS_SCION)
 
 distclean : clean
 	$(MAKE) -C doc distclean
@@ -73,6 +86,8 @@ clean :
 	-rm -f *.gcda *.gcno
 	-rm -rf .deps
 	-rm -rf *.dSYM
+	go clean --cache
+	-rm scion/go/scion_api.h scion/go/scion_api.so
 
 getdate.c : getdate.y
 	bison -o getdate.c getdate.y

@@ -156,6 +156,12 @@ Overriding system detection when cross-compiling:
   --host-release=REL     Specify system release (uname -r)
   --host-machine=CPU     Specify machine (uname -m)
 
+SCION setting
+  --SCIONdir=DIR         location of github.com/scionproto/scion (go.mod)
+  --enable-SCION         Enable SCION support (is always enabled at the moment, as we do not change the files, only the Makefile)
+  --enable-godebug       Enables addition output for golang part (independent of --enable-debug)
+  --enable-scionudpdualmode Enables SCION and UDP mode at the same time as client and server
+
 Some influential environment variables:
   CC          C compiler command
   CFLAGS      C compiler flags
@@ -201,6 +207,8 @@ get_features () {
   done
 }
 #}}}
+
+
 
 # ======================================================================
 
@@ -256,6 +264,9 @@ default_hwclockfile=""
 default_pidfile="/var/run/chrony/chronyd.pid"
 default_rtcdevice="/dev/rtc"
 mail_program="/usr/lib/sendmail"
+feat_SCION=1 #must be enabled at the moment
+feat_godebug=0
+feat_scionudpdualmode=1 #needed at the moment (disabling it is possible: Change select logic a bit)
 
 for option
 do
@@ -402,6 +413,18 @@ do
       usage
       exit 0
     ;;
+    --enable-SCION )
+      feat_SCION=1
+    ;;
+     --SCIONdir=* )
+      SETSCIONDIR=`echo $option | sed -e 's/^.*=//;'`
+    ;;
+    --enable-godebug )
+      feat_godebug=1
+    ;;
+    --enable-scionudpdualmode )
+    feat_scionudpdualmode=1
+    ;;
     * )
     echo "Unrecognized option : " $option
     esac
@@ -491,6 +514,23 @@ if [ $feat_debug = "1" ]; then
   add_def FEAT_DEBUG
 fi
 add_def DEBUG $feat_debug
+
+
+if [ $feat_godebug = "1" ]; then
+  add_def FEAT_GODEBUG
+fi
+add_def GODEBUG $feat_godebug
+
+
+if [ $feat_scionudpdualmode = "1" ]; then
+  add_def FEAT_SCIONUDPDUALMODE
+fi
+add_def SCIONUDPDUALMODE $feat_scionudpdualmode
+
+if [ $feat_SCION = "1" ]; then
+  add_def FEAT_SCION
+fi
+add_def SCION $feat_scion
 
 if [ $feat_cmdmon = "1" ]; then
   add_def FEAT_CMDMON
@@ -1025,6 +1065,11 @@ if [ "x$SETCHRONYVARDIR" != "x" ]; then
   CHRONYVARDIR=$SETCHRONYVARDIR
 fi
 
+SCIONDIR=tbd
+if [ "x$SETSCIONDIR" != "x" ]; then
+  SCIONDIR=$SETSCIONDIR
+fi
+
 add_def DEFAULT_CONF_FILE "\"$SYSCONFDIR/chrony.conf\""
 add_def DEFAULT_HWCLOCK_FILE "\"$default_hwclockfile\""
 add_def DEFAULT_PID_FILE "\"$default_pidfile\""
@@ -1033,9 +1078,9 @@ add_def DEFAULT_USER "\"$default_user\""
 add_def DEFAULT_COMMAND_SOCKET "\"$CHRONYRUNDIR/chronyd.sock\""
 add_def MAIL_PROGRAM "\"$mail_program\""
 
-common_features="`get_features SECHASH IPV6 DEBUG`"
+common_features="`get_features SECHASH IPV6 DEBUG GODEBUG SCIONUDPDUALMODE`"
 chronyc_features="`get_features READLINE`"
-chronyd_features="`get_features CMDMON NTP REFCLOCK RTC PRIVDROP SCFILTER SIGND ASYNCDNS NTS`"
+chronyd_features="`get_features SCION CMDMON NTP REFCLOCK RTC PRIVDROP SCFILTER SIGND ASYNCDNS NTS`"
 add_def CHRONYC_FEATURES "\"$chronyc_features $common_features\""
 add_def CHRONYD_FEATURES "\"$chronyd_features $common_features\""
 echo "Features : $chronyd_features $chronyc_features $common_features"
@@ -1068,6 +1113,7 @@ do
           s%@LOCALSTATEDIR@%${LOCALSTATEDIR}%;\
           s%@CHRONYRUNDIR@%${CHRONYRUNDIR}%;\
           s%@CHRONYVARDIR@%${CHRONYVARDIR}%;\
+          s%@SCIONDIR@%${SCIONDIR}%;\
           s%@DEFAULT_HWCLOCK_FILE@%${default_hwclockfile}%;\
           s%@DEFAULT_PID_FILE@%${default_pidfile}%;\
           s%@DEFAULT_RTC_DEVICE@%${default_rtcdevice}%;\
@@ -1075,6 +1121,23 @@ do
           s%@CHRONY_VERSION@%${CHRONY_VERSION}%;" \
           < ${f}.in > $f
 done
+
+#Ugly hack to create the go.mod without using test
+if [ $SCIONDIR != "tbd" ]
+then
+  echo "Creating go.mod"
+  rm -f go.mod
+  go mod init github.com/sciontime/chrony
+  echo "
+
+require github.com/scionproto/scion v0.6.0
+
+replace github.com/scionproto/scion =>" $SCIONDIR >> go.mod
+fi
+if [ $SCIONDIR = "tbd" ]
+then
+  echo "WARNING: You should use the option --SCIONdir (SCION cannot be disable, comming in production version)"
+fi
 
 # =======================================================================
 # vim:et:sw=2:ht=2:sts=2:fdm=marker:cms=#%s

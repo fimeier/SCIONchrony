@@ -22,17 +22,15 @@
 # Makefile template
 
 SYSCONFDIR = /etc
-BINDIR = /usr/scion/bin
-SBINDIR = /usr/scion/sbin
+BINDIR = /usr/local/bin
+SBINDIR = /usr/local/sbin
 LOCALSTATEDIR = /var
 CHRONYVARDIR = /var/lib/chrony
+SCIONDIR = /home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/scionproto #not in use
 DESTDIR =
 
 CC = gcc
-BACKUPCFLAGSORIGINAL = -O2 -g -D_FORTIFY_SOURCE=2 -fPIE -fstack-protector-strong --param=ssp-buffer-size=4 -Wmissing-prototypes -Wall -pthread
-BACKUPCFLAGMEINS = -O0 -g -Wall -pthread
-CFLAGS = -O0 -g -Wall -pthread
-
+CFLAGS = -O2 -g -D_FORTIFY_SOURCE=2 -fPIE -fstack-protector-strong --param=ssp-buffer-size=4 -Wmissing-prototypes -Wall -pthread
 CPPFLAGS =   -I/usr/include/p11-kit-1
 LDFLAGS =  -pie -Wl,-z,relro,-z,now
 
@@ -54,9 +52,7 @@ ALL_OBJS = $(OBJS) $(CLI_OBJS)
 LIBS =  -lm -lnettle -lgnutls
 EXTRA_LIBS =  -lcap
 EXTRA_CLI_LIBS =  
-EXTRA_LIBS_SCION = /home/fimeier/MasterThesis/repos/chrony/scion/go/scion_api.so#SOLVE this: Full path needed when debuging with gdb.bash as root.. why?
-
-
+EXTRA_LIBS_SCION = $(CURDIR)/scion/go/scion_api.so
 
 # Until we have a main procedure we can link, just build object files
 # to test compilation
@@ -67,12 +63,10 @@ all : go chronyd chronyc
 # There are some funky circular dependencies
 # I guess building and linking should be separated
 # Maybe it isn't possible, as the scion_api.h file is created by cgo, AFTER we need it
-# HINT: make clean is a good idea as we use cgo..... especially if c-structs are changed and you access them from golang
+# HINT: "make clean" is a good idea as we use cgo..... especially if c-structs are changed and you access them from golang
 # HINT: go.mod needs to be in chronys root folder
 go : 
 	go build -buildmode=c-shared -o scion/go/scion_api.so scion/go/*.go
-	go build sciontest/SCIONclient2ntpserver/SCIONclient2ntpserver.go
-	go build sciontest/ntpclient2SCIONserver/ntpclient2SCIONserver.go
 
 chronyd : $(OBJS)
 	$(CC) $(CFLAGS) -o chronyd $(OBJS) $(LDFLAGS) $(LIBS) $(EXTRA_LIBS) $(EXTRA_LIBS_SCION)

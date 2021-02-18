@@ -1,19 +1,13 @@
-#define SCIONUDPDUALMODE 1
-
-
 #define SCIONERROR ECONNREFUSED //könnten da auch als Rückgabewert diekt codieren und dann auf -1 ändern
 
 #define MSGBUFFERSIZE 100
 #define MSGBUFFERSIZESERVER 1000
 
-#define GODEBUG 1
 
 //#define MAX_RECV_MESSAGES 16
 #define VLEN 16 //corresponds to MAX_RECV_MESSAGES as defined in socket.c
-
 #define IOVLEN 1140 //TODO variable machen bzw von chrony parsen... hängt von extensions ab
 
-#define IFINDEX 666 //solve this. Okay :-D
 
 #include "config.h"
 #include "logging.h"
