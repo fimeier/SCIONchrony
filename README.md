@@ -1,3 +1,4 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/sciontime/chrony)](https://goreportcard.com/report/github.com/sciontime/chrony)
 
 
 
