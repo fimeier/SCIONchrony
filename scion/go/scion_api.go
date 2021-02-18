@@ -736,7 +736,7 @@ func (s *FDSTATUS) rcvLogic() {
 }
 
 //SCIONgosetsockopt gets called each time a setsockopt() is executed for So_TIMESTAMPING options.
-//Settings are encoded inside of Sinfo. Some of the options are explicitely set in go's memory (redundant).
+//Settings are encoded inside of Sinfo. Some of the options are explicitly set in go's memory (redundant).
 //export SCIONgosetsockopt
 func SCIONgosetsockopt(_fd C.int) C.int {
 	fd := int(_fd)
@@ -906,6 +906,8 @@ As a simple solution: checkNTPfile and checkNTPexcept are used to tell recevmsg 
 We always call the go world, this will be correct in most cases and it always returns.
 Keep in mind, this is just a test. I want to get rid of everything that comes into play when we have to receive tx-ts over scion.
 */
+
+// SCIONselect emulates the behaviour of select() for c-sockets and checks the goWorld in a similar way
 //export SCIONselect
 func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds C.fdsetPtr, timeout C.timevalPtr, checkNTPfile *C.int, checkNTPexcept *C.int) C.int {
 	start := time.Now()
@@ -1214,6 +1216,7 @@ func SCIONselect(nfds C.int, readfds C.fdsetPtr, writefds C.fdsetPtr, exceptfds 
 	return C.int(numOfBitsSet) //Todo err to errno?
 }
 
+// SCIONgosendmsg emulates the behaviour of sendmsg()
 //export SCIONgosendmsg
 func SCIONgosendmsg(_fd C.int, message C.msghdrConstPtr, flags C.int, _remoteAddrString *C.char, _requestTxTimestamp C.int) C.ssize_t {
 	fd := int(_fd)

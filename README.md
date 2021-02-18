@@ -1,3 +1,7 @@
+[![Go Report Card](https://goreportcard.com/badge/github.com/sciontime/chrony)](https://goreportcard.com/report/github.com/sciontime/chrony)
+
+
+
 # Build-it
 Define your SCIONDIR and run ./configure with the additional option --SCIONdir
 
