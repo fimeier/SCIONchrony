@@ -121,7 +121,7 @@ extern int SCIONstartntp();
 extern int SCIONgobind(int _fd, uint16_t _port, int callRegister);
 
 //SCIONgosetsockopt gets called each time a setsockopt() is executed for So_TIMESTAMPING options.
-//Settings are encoded inside of Sinfo. Some of the options are explicitely set in go's memory (redundant).
+//Settings are encoded inside of Sinfo. Some of the options are explicitly set in go's memory (redundant).
 extern int SCIONgosetsockopt(int _fd);
 
 //SCIONgosocket creates the needed datastructure to keep state in the SCION-GO-World.
@@ -133,18 +133,10 @@ extern int SCIONgosocket(int domain, int _type, int protocol, fdInfoPtr sinfo);
 //
 extern int SCIONgoclose(int _fd);
 
-/*
-Optimierung nötig!!!!
-
-Warning: Chronyd is using select() as a timeout mechanism
-=> "Iff chrony is a client and plans to send a msg in 60sec, it will call select() with an appropriate timeout, return without any ready fd's and then check for sendtimeouts...."
-REMARK: At the moment there is no write-Queue => all Flags will be set to  zero if present
-
-As a simple solution: checkNTPfile and checkNTPexcept are used to tell recevmsg to also check the c-world
-We always call the go world, this will be correct in most cases and it always returns.
-Keep in mind, this is just a test. I want to get rid of everything that comes into play when we have to receive tx-ts over scion.
-*/
+// SCIONselect emulates the behaviour of select() for c-sockets and checks the goWorld in a similar way
 extern int SCIONselect(int nfds, fdsetPtr readfds, fdsetPtr writefds, fdsetPtr exceptfds, timevalPtr timeout, int* checkNTPfile, int* checkNTPexcept);
+
+// SCIONgosendmsg emulates the behaviour of sendmsg()
 extern ssize_t SCIONgosendmsg(int _fd, msghdrConstPtr message, int flags, char* _remoteAddrString, int _requestTxTimestamp);
 
 // SCIONgorecvmmsg collects the received messages and returns them.... but ist not the one actively receiving the stuff

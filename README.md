@@ -1,15 +1,24 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/sciontime/chrony)](https://goreportcard.com/report/github.com/sciontime/chrony)
 
+## SCIONchrony / this fork
 
+Join [SCIONLab](https://www.scionlab.org) if you're interested in playing with
+SCION in an operational global test deployment of SCION.
 
-# Build-it
-Define your SCIONDIR and run ./configure with the additional option --SCIONdir
+This fork of [chrony/chrony](https://git.tuxfamily.org/chrony/chrony.git) alows chrony the use SCION as an underlay network.
 
-./configure --SCIONdir=$SCIONDIR
+# Building
+1. Download this repository
 
-Example:
+2. Configure the project: ./configure --SCIONdir=$SCIONDIR
+
+3. make
+
+Important: (As of 1.3.2021) Use the fork Scion Time available at [sciontime/scion](https://github.com/sciontime/scion).
+
+Example output configure:
 ```console
-$./configure --SCIONdir=/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/scionproto --enable-godebug --enable-debug --enable-SCION
+$./configure --SCIONdir=/home/ethz/repos/scionproto --enable-godebug --enable-debug --enable-SCION
 [...]
 Features : +SCION +CMDMON +NTP +REFCLOCK +RTC +PRIVDROP -SCFILTER -SIGND +ASYNCDNS +NTS -READLINE +SECHASH +IPV6 +DEBUG +GODEBUG +SCIONUDPDUALMODE
 Creating Makefile
@@ -32,11 +41,32 @@ SCION setting
 
 ```
 
+# Some Hints
+Consult the [offical documentation](https://chrony.tuxfamily.org/) for other installation options and configurations. SCIONchrony provides the same options/functionalty as the offical version, plus some more SCION related features.
 
-# Disable built-in time syn service
+## Configuration
+SCIONchrony has some additional directives for chrony's configuration file ([chrony.conf(5) Manual Page](https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html))
+
+SCION sciondAddr "IPv4":"Port"
+SCION localAddr "AS","IP"
+
+SCION server "IPv4":"Port" "AS","IP"
+
+Example:
+```console
+SCION sciondAddr 127.0.0.1:30255
+SCION localAddr 1-ff00:0:112,10.80.45.120
+
+#there must be a matching "server" directive for each "SCION server"
+server 10.80.45.241 port 123 xleave iburst
+SCION server 10.80.45.241:123 1-ff00:0:112,10.80.45.241:123
+
+```
+
+## Disable built-in time syn service
 sudo timedatectl set-ntp 0
 
-# (Optional) Install Meinberg driver after kernel update
+## (Optional) Install Meinberg driver after kernel update
 ```console
 #Install pre-requirements. Consult README in mbgtools for details.
 sudo apt-get install linux-headers-generic
