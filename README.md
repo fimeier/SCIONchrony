@@ -42,7 +42,7 @@ SCION setting
 ```
 
 # Some Hints
-Consult the [offical documentation](https://chrony.tuxfamily.org/) for other installation options and configurations. SCIONchrony provides the same options/functionalty as the offical version, plus some more SCION related features.
+Consult the official documentation [offical documentation](https://chrony.tuxfamily.org/) for other installation options and configurations. SCIONchrony provides the same options/functionalities as the official version, plus some more SCION related features.
 
 ## Configuration
 SCIONchrony has some additional directives for chrony's configuration file ([chrony.conf(5) Manual Page](https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html))
