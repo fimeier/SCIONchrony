@@ -49,9 +49,9 @@ SCIONchrony has some additional directives for chrony's configuration file ([chr
 
 SCION sciondAddr "IPv4":"Port"
 
-SCION localAddr "AS","IP"
+SCION localAddr "ISD-AS","IP"
 
-SCION server "IPv4":"Port" "AS","IP"
+SCION server "IPv4":"Port" "ISD-AS","IP"
 
 Example:
 ```console
