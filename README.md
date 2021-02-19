@@ -48,6 +48,7 @@ Consult the official documentation [offical documentation](https://chrony.tuxfam
 SCIONchrony has some additional directives for chrony's configuration file ([chrony.conf(5) Manual Page](https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html))
 
 SCION sciondAddr "IPv4":"Port"
+
 SCION localAddr "AS","IP"
 
 SCION server "IPv4":"Port" "AS","IP"
