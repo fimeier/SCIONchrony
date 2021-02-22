@@ -159,7 +159,7 @@ Overriding system detection when cross-compiling:
 SCION setting
   --SCIONdir=DIR         location of github.com/scionproto/scion (go.mod)
   --enable-SCION         Enable SCION support (is always enabled at the moment, as we do not change the files, only the Makefile)
-  --enable-godebug       Enables addition output for golang part (independent of --enable-debug)
+  --enable-godebug       Enables additional output for golang part (independent of --enable-debug)
   --enable-scionudpdualmode Enables SCION and UDP mode at the same time as client and server
 
 Some influential environment variables:
