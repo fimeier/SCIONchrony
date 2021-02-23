@@ -1,4 +1,4 @@
-.conf
+*.conf
 sciontest/
 go.mod
 go.sum
