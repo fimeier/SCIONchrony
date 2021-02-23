@@ -47,11 +47,11 @@ Consult the official documentation [offical documentation](https://chrony.tuxfam
 ## Configuration
 SCIONchrony has some additional directives for chrony's configuration file ([chrony.conf(5) Manual Page](https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html))
 
-SCION sciondAddr \<IPv4>:\<Port>
+SCION sciondAddr \<IPv4>:\<Port> (mandatory)
 
-SCION localAddr \<ISD-AS>,\<IPv4>
+SCION localAddr \<ISD-AS>,\<IPv4>  (mandatory)
 
-SCION server \<IPv4>:\<Port> \<ISD-AS>,\<IPv4>:\<Port>
+SCION server \<IPv4>:\<Port> \<ISD-AS>,\<IPv4>:\<Port> (otpional)
 
 Example:
 ```console

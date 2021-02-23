@@ -51,13 +51,13 @@
         }
         ,
         {
-            "name": "Debug chrony as ROOT (Bernina)",
+            "name": "chrony Ubi-VM-P52",
             "type": "cppdbg",
             "request": "launch",
             "program": "${fileDirname}/chronyd",
             //ACHTUNG: "-d -d"<==> When chronyd was compiled with debugging support, this option can be used twice to print also debugging messages.
             //sudo ./chronyd -P 0 -4 -d -d -f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuBernina.conf
-            "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyServerUbuntuBernina.conf"],
+            "args": ["-P 0","-4","-d","-d","-f/home/fimeier/Dropbox/00ETH/HS20/MasterThesis/repos/chrony/chronyUbiVMP52.conf"],
 
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
