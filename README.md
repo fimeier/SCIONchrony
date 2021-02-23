@@ -18,7 +18,7 @@ Important: (As of 1.3.2021) Use the fork Scion Time available at [sciontime/scio
 
 Example output configure:
 ```console
-$./configure --SCIONdir=/home/ethz/repos/scionproto --enable-godebug --enable-debug --enable-SCION
+$ ./configure --SCIONdir=/home/ethz/repos/scionproto --enable-godebug --enable-debug --enable-SCION
 [...]
 Features : +SCION +CMDMON +NTP +REFCLOCK +RTC +PRIVDROP -SCFILTER -SIGND +ASYNCDNS +NTS -READLINE +SECHASH +IPV6 +DEBUG +GODEBUG +SCIONUDPDUALMODE
 Creating Makefile
@@ -65,30 +65,40 @@ SCION server 10.80.45.241:123 1-ff00:0:112,10.80.45.241:123
 ```
 
 ## Disable built-in time sync service
-On Ubuntu disable the time synchronization service before activating chrony: ```sudo timedatectl set-ntp 0```
+On Ubuntu disable the time synchronization service before activating chrony:
+```console
+$ sudo timedatectl set-ntp 0
+```
 
 ## (Optional) Install Meinberg driver for PCIExpress GNSS receiver
 ```console
 #Install pre-requirements. Consult README in mbgtools for details.
-sudo apt-get install linux-headers-generic
+$ sudo apt-get install linux-headers-generic
+```
 
+```console
 #download and unpack mbgtools
-wget https://www.meinbergglobal.com/download/drivers/mbgtools-lx-4.2.14.tar.gz
+$ wget https://www.meinbergglobal.com/download/drivers/mbgtools-lx-4.2.14.tar.gz
+```
 
+```console
 #mbgtools build/install
-cd mbgtools-lx-4.2.14/
-make clean
-make
-sudo make install
+$ cd mbgtools-lx-4.2.14/
+$ make clean
+$ make
+$ sudo make install
+```
 
+```console
 #load the kernelmodule after installation
-sudo modprobe mbgclock
+$ sudo modprobe mbgclock
 ```
 Useful Commands
 ```console
 #Start the SHM driver, and provide infos about system clock. Chrony can use this reference clock with the following config: refclock SHM 0 poll 3 refid GNS1
-sudo mbgsvcd -f 
+$ sudo mbgsvcd -f
+```
 
 #details about used GNSS
-mbgstatus
+$ mbgstatus
 ```
