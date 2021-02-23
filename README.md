@@ -47,11 +47,11 @@ Consult the official documentation [offical documentation](https://chrony.tuxfam
 ## Configuration
 SCIONchrony has some additional directives for chrony's configuration file ([chrony.conf(5) Manual Page](https://chrony.tuxfamily.org/doc/4.0/chrony.conf.html))
 
-SCION sciondAddr \<IPv4>:\<Port> (mandatory)
+```SCION sciondAddr \<IPv4>:\<Port> (mandatory)```
 
-SCION localAddr \<ISD-AS>,\<IPv4>  (mandatory)
+```SCION localAddr \<ISD-AS>,\<IPv4>  (mandatory)```
 
-SCION server \<IPv4>:\<Port> \<ISD-AS>,\<IPv4>:\<Port> (otpional)
+```SCION server \<IPv4>:\<Port> \<ISD-AS>,\<IPv4>:\<Port> (otpional)```
 
 Example:
 ```console
@@ -64,10 +64,10 @@ SCION server 10.80.45.241:123 1-ff00:0:112,10.80.45.241:123
 
 ```
 
-## Disable built-in time syn service
-sudo timedatectl set-ntp 0
+## Disable built-in time sync service
+On Ubuntu disable the time synchronization service before activating chrony: ```sudo timedatectl set-ntp 0```
 
-## (Optional) Install Meinberg driver after kernel update
+## (Optional) Install Meinberg driver for PCIExpress GNSS receiver
 ```console
 #Install pre-requirements. Consult README in mbgtools for details.
 sudo apt-get install linux-headers-generic
