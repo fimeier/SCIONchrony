@@ -100,5 +100,6 @@ $ sudo mbgsvcd -f
 ```
 
 #details about used GNSS
+```console
 $ mbgstatus
 ```
