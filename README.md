@@ -93,13 +93,14 @@ $ sudo make install
 #load the kernelmodule after installation
 $ sudo modprobe mbgclock
 ```
-Useful Commands
+
+Useful Commands:
 ```console
 #Start the SHM driver, and provide infos about system clock. Chrony can use this reference clock with the following config: refclock SHM 0 poll 3 refid GNS1
 $ sudo mbgsvcd -f
 ```
 
-#details about used GNSS
 ```console
+#details about used GNSS
 $ mbgstatus
 ```
